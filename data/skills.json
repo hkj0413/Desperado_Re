@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "records": {
+    "handgun_shot": {
+      "display_name": "핸드건 사격",
+      "slot": 1,
+      "behavior_type": "projectile",
+      "cooldown_seconds": 0.18,
+      "resource_cost": {
+        "ammo_type": "handgun",
+        "amount": 1
+      },
+      "projectile": {
+        "damage": 18,
+        "speed": 980.0,
+        "lifetime_seconds": 1.2,
+        "pierce_count": 0,
+        "width": 16,
+        "height": 8,
+        "placeholder_color": [
+          255,
+          226,
+          102
+        ]
+      },
+      "presentation": {
+        "sound_key": "sfx_handgun_shot",
+        "effect_key": "fx_muzzle_handgun"
+      }
+    },
+    "shotgun_burst": {
+      "display_name": "샷건 산탄",
+      "slot": 2,
+      "behavior_type": "projectile_spread",
+      "cooldown_seconds": 0.75,
+      "resource_cost": {
+        "ammo_type": "shotgun",
+        "amount": 1
+      },
+      "projectile": {
+        "damage": 10,
+        "speed": 760.0,
+        "lifetime_seconds": 0.45,
+        "pierce_count": 0,
+        "width": 12,
+        "height": 8,
+        "placeholder_color": [
+          255,
+          159,
+          67
+        ]
+      },
+      "spread": {
+        "count": 7,
+        "angle_degrees": 28.0
+      },
+      "presentation": {
+        "sound_key": "sfx_shotgun_burst",
+        "effect_key": "fx_muzzle_shotgun"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "records": {
+    "desperado": {
+      "display_name": "Desperado",
+      "stats": {
+        "max_hp": 100,
+        "move_speed": 420.0,
+        "contact_invulnerability_seconds": 0.6
+      },
+      "starting_loadout": {
+        "skill_ids": [
+          "handgun_shot",
+          "shotgun_burst"
+        ],
+        "items": {
+          "small_heal": 2
+        }
+      },
+      "visual": {
+        "sprite_key": "player_desperado",
+        "placeholder_color": [
+          70,
+          170,
+          255
+        ],
+        "width": 48,
+        "height": 80
+      }
+    }
+  }
+}

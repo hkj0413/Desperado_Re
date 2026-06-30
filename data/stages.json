@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "records": {
+    "prototype_stage": {
+      "display_name": "Scrolling Prototype Stage",
+      "player_character_id": "desperado",
+      "world_bounds": {
+        "left": 0,
+        "top": 0,
+        "right": 5200,
+        "bottom": 900
+      },
+      "player_spawn": {
+        "x": 180,
+        "y": 680
+      },
+      "terrain_blocks": [
+        {
+          "x": 0,
+          "y": 770,
+          "width": 5200,
+          "height": 130,
+          "kind": "floor"
+        },
+        {
+          "x": 820,
+          "y": 650,
+          "width": 260,
+          "height": 34,
+          "kind": "platform"
+        },
+        {
+          "x": 1420,
+          "y": 560,
+          "width": 360,
+          "height": 34,
+          "kind": "platform"
+        },
+        {
+          "x": 2200,
+          "y": 640,
+          "width": 300,
+          "height": 34,
+          "kind": "platform"
+        },
+        {
+          "x": 3000,
+          "y": 540,
+          "width": 420,
+          "height": 34,
+          "kind": "platform"
+        },
+        {
+          "x": 3900,
+          "y": 650,
+          "width": 300,
+          "height": 34,
+          "kind": "platform"
+        },
+        {
+          "x": 4550,
+          "y": 570,
+          "width": 320,
+          "height": 34,
+          "kind": "platform"
+        }
+      ],
+      "enemy_spawns": [
+        {
+          "enemy_id": "spore",
+          "x": 1050,
+          "y": 715
+        },
+        {
+          "enemy_id": "stone_golem",
+          "x": 2500,
+          "y": 650
+        },
+        {
+          "enemy_id": "spore",
+          "x": 3440,
+          "y": 715
+        },
+        {
+          "enemy_id": "stone_golem",
+          "x": 4380,
+          "y": 650
+        }
+      ],
+      "item_spawns": [
+        {
+          "item_id": "small_heal",
+          "x": 520,
+          "y": 730
+        },
+        {
+          "item_id": "handgun_ammo",
+          "x": 1960,
+          "y": 730
+        },
+        {
+          "item_id": "small_heal",
+          "x": 3220,
+          "y": 730
+        },
+        {
+          "item_id": "handgun_ammo",
+          "x": 4740,
+          "y": 730
+        }
+      ],
+      "portal": {
+        "x": 5010,
+        "y": 700,
+        "width": 54,
+        "height": 70,
+        "target_stage_id": "prototype_stage"
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "window": {
+    "width": 1600,
+    "height": 900,
+    "title": "Desperado Re:",
+    "background_color": [
+      22,
+      26,
+      35
+    ]
+  },
+  "runtime": {
+    "target_fps": 120,
+    "max_delta_seconds": 0.05
+  }
+}

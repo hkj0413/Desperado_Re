@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "records": {
+    "spore": {
+      "display_name": "Spore",
+      "archetype": "enemy",
+      "stats": {
+        "max_hp": 80,
+        "move_speed": 90.0,
+        "contact_damage": 12,
+        "contact_cooldown_seconds": 1.0,
+        "hit_invulnerability_seconds": 0.12
+      },
+      "ai": {
+        "behavior_type": "chase",
+        "detect_range": 350.0,
+        "attack_range": 42.0
+      },
+      "ui": {
+        "hp_show_distance": 420.0,
+        "hp_bar_offset_y": 12
+      },
+      "rewards": {
+        "drop_table_id": "spore_basic"
+      },
+      "visual": {
+        "sprite_key": "enemy_spore",
+        "placeholder_color": [
+          228,
+          88,
+          88
+        ],
+        "width": 54,
+        "height": 54
+      }
+    },
+    "stone_golem": {
+      "display_name": "Stone Golem",
+      "archetype": "boss",
+      "stats": {
+        "max_hp": 900,
+        "move_speed": 68.0,
+        "contact_damage": 34,
+        "contact_cooldown_seconds": 1.2,
+        "hit_invulnerability_seconds": 0.18
+      },
+      "ai": {
+        "behavior_type": "boss_state_machine",
+        "detect_range": 620.0,
+        "attack_range": 95.0
+      },
+      "ui": {
+        "hp_show_distance": 620.0,
+        "hp_bar_offset_y": 18
+      },
+      "rewards": {
+        "drop_table_id": "boss_stone_golem"
+      },
+      "visual": {
+        "sprite_key": "enemy_stone_golem",
+        "placeholder_color": [
+          166,
+          132,
+          91
+        ],
+        "width": 120,
+        "height": 120
+      }
+    }
+  }
+}

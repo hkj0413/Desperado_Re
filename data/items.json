@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "records": {
+    "small_heal": {
+      "display_name": "소형 회복약",
+      "item_type": "consumable",
+      "max_stack": 10,
+      "use_cooldown_seconds": 0.5,
+      "effect": {
+        "effect_type": "heal",
+        "amount": 35
+      },
+      "visual": {
+        "icon_key": "item_small_heal",
+        "drop_sprite_key": "drop_small_heal",
+        "placeholder_color": [
+          102,
+          255,
+          153
+        ]
+      }
+    },
+    "handgun_ammo": {
+      "display_name": "핸드건 탄약",
+      "item_type": "ammo",
+      "max_stack": 99,
+      "effect": {
+        "effect_type": "add_ammo",
+        "ammo_type": "handgun",
+        "amount": 12
+      },
+      "visual": {
+        "icon_key": "item_handgun_ammo",
+        "drop_sprite_key": "drop_handgun_ammo",
+        "placeholder_color": [
+          190,
+          190,
+          210
+        ]
+      }
+    }
+  }
+}
