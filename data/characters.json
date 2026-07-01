@@ -70,7 +70,7 @@
           }
         },
         "draw_offset_x": 0.0,
-        "draw_offset_y": 0.0,
+        "draw_offset_y": -34.0,
         "mirror_draw_offset_x_when_facing_left": true
       }
     },
@@ -113,7 +113,7 @@
           }
         },
         "draw_offset_x": 0.0,
-        "draw_offset_y": 0.0,
+        "draw_offset_y": -34.0,
         "mirror_draw_offset_x_when_facing_left": true
       }
     }
