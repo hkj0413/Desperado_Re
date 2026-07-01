@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "tile_size": 40,
+  "block_directory": "assets/Block",
+
+  "records": {
+    "floor": {
+      "display_name": "Floor",
+      "collision_mode": "solid"
+    },
+
+    "platform": {
+      "display_name": "Platform",
+      "collision_mode": "one_way"
+    }
+  }
+}

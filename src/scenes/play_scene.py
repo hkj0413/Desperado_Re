@@ -13,7 +13,11 @@ from src.gameplay.entities.player import Player
 from src.gameplay.entities.portal import Portal
 from src.gameplay.entities.projectile import Projectile
 from src.gameplay.entities.terrain import TerrainBlock
-from src.gameplay.factories import create_enemy, create_item_drop, create_player
+from src.gameplay.factories import (
+    create_enemy,
+    create_item_drop,
+    create_player,
+)
 from src.ui.hud import Hud
 
 if TYPE_CHECKING:
@@ -23,50 +27,107 @@ if TYPE_CHECKING:
 class PlayScene(Scene):
     """Composes one stage and owns its camera.
 
-    - `World` and every Entity use WORLD coordinates.
-    - `Camera` follows the player and converts world -> screen only in draw().
-    - `Hud` always uses SCREEN coordinates, so it never scrolls.
+    - World, collision, and physics use WORLD coordinates.
+    - Camera converts world coordinates to screen coordinates only in draw().
+    - Terrain uses 20 x 20 grid tiles.
+    - Each tile uses Block (n).png selected in stages.json.
+    - Hud uses SCREEN coordinates and never scrolls.
     """
 
     def __init__(self, app: GameApp, stage_id: str) -> None:
         super().__init__(app)
+
         self.stage_id = stage_id
         self.world: World | None = None
         self.camera: Camera | None = None
         self.player: Player | None = None
+
         self.hud = Hud()
         self.notice = ''
         self._notice_until = 0.0
 
+        self.tile_size = 20
+
     def on_enter(self) -> None:
         stage = self.app.data.record('stages', self.stage_id)
+
         bounds = WorldBounds.from_mapping(stage['world_bounds'])
         self.world = World(bounds)
 
         viewport_width, viewport_height = self.app.screen.get_size()
-        self.camera = Camera(viewport_width, viewport_height, bounds)
+
+        self.camera = Camera(
+            viewport_width,
+            viewport_height,
+            bounds,
+        )
+
+        tiles_table = self.app.data.table('tiles')
+        self.tile_size = int(tiles_table['tile_size'])
+        block_directory = str(tiles_table['block_directory'])
 
         spawn = stage['player_spawn']
+
         self.player = create_player(
             self.app,
             stage['player_character_id'],
             float(spawn['x']),
             float(spawn['y']),
         )
+
         self.world.add(self.player)
 
-        # Terrain JSON stores x/y as its world-space top-left corner.
-        # Entity positions use center coordinates, so convert once here.
-        for block in stage['terrain_blocks']:
-            self.world.add(
-                TerrainBlock(
-                    float(block['x']) + float(block['width']) * 0.5,
-                    float(block['y']) + float(block['height']) * 0.5,
-                    float(block['width']),
-                    float(block['height']),
-                    str(block.get('kind', 'floor')),
-                )
+        # terrain_regions 하나는 cols × rows만큼 20 × 20 타일을 생성한다.
+        #
+        # 예:
+        # {
+        #   "kind": "floor",
+        #   "block": 1,
+        #   "col": 0,
+        #   "row": 36,
+        #   "cols": 320,
+        #   "rows": 9
+        # }
+        #
+        # 위 데이터는 Block (1).png를 320 × 9번 반복한다.
+        for region in stage['terrain_regions']:
+            kind = str(region['kind'])
+            block_number = int(region['block'])
+
+            definition = self.app.data.record(
+                'tiles',
+                kind,
             )
+
+            for row_offset in range(int(region['rows'])):
+                for col_offset in range(int(region['cols'])):
+                    grid_col = int(region['col']) + col_offset
+                    grid_row = int(region['row']) + row_offset
+
+                    world_left = (
+                            bounds.left
+                            + grid_col * self.tile_size
+                    )
+
+                    # row 0은 월드 맨 아래다.
+                    world_bottom = (
+                            bounds.bottom
+                            + grid_row * self.tile_size
+                    )
+
+                    self.world.add(
+                        TerrainBlock(
+                            kind=kind,
+                            definition=definition,
+                            world_left=world_left,
+                            world_bottom=world_bottom,
+                            tile_size=self.tile_size,
+                            block_number=block_number,
+                            block_directory=block_directory,
+                            grid_col=grid_col,
+                            grid_row=grid_row,
+                        )
+                    )
 
         for spawn_info in stage['enemy_spawns']:
             self.world.add(
@@ -89,6 +150,7 @@ class PlayScene(Scene):
             )
 
         portal = stage['portal']
+
         self.world.add(
             Portal(
                 float(portal['x']),
@@ -99,30 +161,49 @@ class PlayScene(Scene):
             )
         )
 
-        # Category pairs stay stable even when a new enemy type is added.
-        self.world.collisions.register('player', 'item', self._on_player_item)
-        self.world.collisions.register('player', 'portal', self._on_player_portal)
-        self.world.collisions.register('player_projectile', 'enemy', self._on_projectile_enemy)
-        self.world.collisions.register('player', 'terrain', self._on_player_terrain)
+        # floor / platform 충돌은 Player 내부에서 처리한다.
+        # 여기서는 아이템, 포탈, 투사체 충돌만 등록한다.
+        self.world.collisions.register(
+            'player',
+            'item',
+            self._on_player_item,
+        )
+
+        self.world.collisions.register(
+            'player',
+            'portal',
+            self._on_player_portal,
+        )
+
+        self.world.collisions.register(
+            'player_projectile',
+            'enemy',
+            self._on_projectile_enemy,
+        )
+
         self.world.commit()
 
-        # The camera begins centered on the player in world space.
         self.camera.follow(self.player.x, self.player.y)
+
         self.set_notice(
-            '좌우로 이동하면 카메라가 스크롤됩니다. 충돌은 월드 좌표로만 처리됩니다.',
-            4.0,
+            'A/D 또는 ←/→ 이동 · ↑/Space 점프 · '
+            'floor는 전방향 충돌 · platform은 착지만 충돌',
+            5.0,
         )
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             from src.scenes.main_menu_scene import MainMenuScene
+
             self.app.scene_manager.change(MainMenuScene)
             return
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F5:
             self.app.reload_data()
+
             self.set_notice(
-                'JSON 데이터테이블을 다시 읽었습니다. 새로 생성되는 객체부터 새 수치를 사용합니다.',
+                'JSON 데이터테이블을 다시 읽었습니다. '
+                '현재 스테이지 배치는 다시 시작해야 적용됩니다.',
                 3.0,
             )
             return
@@ -131,6 +212,7 @@ class PlayScene(Scene):
             return
 
         skill_result = self.player.handle_event(event, self.app)
+
         if skill_result is None:
             return
 
@@ -143,10 +225,8 @@ class PlayScene(Scene):
         if self.world is None or self.camera is None:
             return
 
-        # Update and collision: world coordinates only.
         self.world.update(delta_seconds, self.app)
 
-        # Camera movement happens afterward and never changes entity x/y.
         if self.player is not None and self.player.alive:
             self.camera.follow(self.player.x, self.player.y)
 
@@ -157,61 +237,15 @@ class PlayScene(Scene):
         if self.world is None or self.camera is None:
             return
 
-        self._draw_world_grid(screen)
         self.world.draw(screen, self.app, self.camera)
 
         if self.player is not None:
-            self.hud.draw(screen, self.app, self.player, self.camera, self.notice)
-
-    def _draw_world_grid(self, screen: pygame.Surface) -> None:
-        """Light world-space reference grid so scrolling is obvious in prototype."""
-
-        if self.camera is None:
-            return
-
-        camera = self.camera
-        bounds = camera.world_bounds
-        line_color = (31, 37, 49)
-        major_color = (44, 51, 66)
-        label_color = (106, 120, 143)
-
-        grid_step = 200
-        start_x = int(camera.view_left // grid_step) * grid_step
-        end_x = int(camera.view_right // grid_step + 1) * grid_step
-
-        for world_x in range(start_x, end_x + 1, grid_step):
-            if world_x < bounds.left or world_x > bounds.right:
-                continue
-
-            screen_x, _ = camera.world_to_screen(world_x, bounds.top)
-            is_major = world_x % 1000 == 0
-            pygame.draw.line(
+            self.hud.draw(
                 screen,
-                major_color if is_major else line_color,
-                (screen_x, 0),
-                (screen_x, screen.get_height()),
-                width=2 if is_major else 1,
-            )
-
-            if is_major:
-                label = self.app.fonts.get(16).render(f'WORLD X {world_x}', True, label_color)
-                screen.blit(label, (screen_x + 8, 188))
-
-        grid_step_y = 200
-        start_y = int(camera.view_top // grid_step_y) * grid_step_y
-        end_y = int(camera.view_bottom // grid_step_y + 1) * grid_step_y
-
-        for world_y in range(start_y, end_y + 1, grid_step_y):
-            if world_y < bounds.top or world_y > bounds.bottom:
-                continue
-
-            _, screen_y = camera.world_to_screen(bounds.left, world_y)
-            pygame.draw.line(
-                screen,
-                line_color,
-                (0, screen_y),
-                (screen.get_width(), screen_y),
-                width=1,
+                self.app,
+                self.player,
+                self.camera,
+                self.notice,
             )
 
     def _spawn_skill(self, skill_id: str) -> None:
@@ -226,22 +260,53 @@ class PlayScene(Scene):
                 Projectile(
                     skill_id,
                     skill,
-                    self.player.x + self.player.facing * (self.player.width * 0.55),
+                    self.player.x
+                    + self.player.facing * (self.player.width * 0.55),
                     self.player.y,
                     self.player.facing,
                 )
             )
-            self.set_notice(f"{skill['display_name']} 사용", 0.7)
-        else:
-            self.set_notice(f"{skill['display_name']}은(는) 아직 구현되지 않은 행동 유형입니다.", 2.0)
 
-    def _on_player_item(self, player: Player, item: ItemDrop, world: World, app: GameApp) -> None:
-        message = player.add_item(item.item_id, 1, item.definition)
+            self.set_notice(
+                f"{skill['display_name']} 사용",
+                0.7,
+            )
+
+        else:
+            self.set_notice(
+                f"{skill['display_name']}은(는) 아직 구현되지 않은 "
+                '행동 유형입니다.',
+                2.0,
+            )
+
+    def _on_player_item(
+        self,
+        player: Player,
+        item: ItemDrop,
+        world: World,
+        app: GameApp,
+    ) -> None:
+        message = player.add_item(
+            item.item_id,
+            1,
+            item.definition,
+        )
+
         world.remove(item)
         self.set_notice(message, 2.0)
 
-    def _on_player_portal(self, player: Player, portal: Portal, world: World, app: GameApp) -> None:
-        self.set_notice(f"포탈 감지: 다음에는 '{portal.target_stage_id}' 로드 규칙을 연결합니다.", 1.0)
+    def _on_player_portal(
+        self,
+        player: Player,
+        portal: Portal,
+        world: World,
+        app: GameApp,
+    ) -> None:
+        self.set_notice(
+            f"포탈 감지: 다음에는 '{portal.target_stage_id}' "
+            '로드 규칙을 연결합니다.',
+            1.0,
+        )
 
     def _on_projectile_enemy(
         self,
@@ -250,14 +315,17 @@ class PlayScene(Scene):
         world: World,
         app: GameApp,
     ) -> None:
-        if projectile.register_enemy_hit(enemy, world) and enemy.take_damage(projectile.damage, app):
-            self.set_notice(f"{enemy.display_name}에게 {projectile.damage} 피해", 0.6)
-
-    @staticmethod
-    def _on_player_terrain(player: Player, terrain: TerrainBlock, world: World, app: GameApp) -> None:
-        # Intentional extension point: when gravity/jump are added, move the
-        # resolution code to a PlayerMovementSystem rather than expanding Scene.
-        _ = (player, terrain, world, app)
+        if projectile.register_enemy_hit(
+            enemy,
+            world,
+        ) and enemy.take_damage(
+            projectile.damage,
+            app,
+        ):
+            self.set_notice(
+                f'{enemy.display_name}에게 {projectile.damage} 피해',
+                0.6,
+            )
 
     def set_notice(self, message: str, seconds: float) -> None:
         self.notice = message

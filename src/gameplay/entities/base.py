@@ -13,11 +13,14 @@ if TYPE_CHECKING:
 
 
 class Entity:
-    """Base for world objects.
+    """Base class for all world objects.
 
-    `x` and `y` are always WORLD coordinates. They are used by update,
-    collision, distance checks, and spawning. Draw methods receive a Camera and
-    convert to SCREEN coordinates only when rendering.
+    World coordinate convention:
+    - left-bottom is (0, 0)
+    - +x goes right
+    - +y goes up
+
+    x and y are always world-space center coordinates.
     """
 
     def __init__(
@@ -34,6 +37,7 @@ class Entity:
         self.y = y
         self.width = width
         self.height = height
+
         self.layer = layer
         self.collision_group = collision_group
         self.alive = True
@@ -41,14 +45,20 @@ class Entity:
     def get_aabb(self) -> AABB | None:
         if self.collision_group is None:
             return None
+
         return AABB(
             left=self.x - self.width * 0.5,
-            top=self.y - self.height * 0.5,
+            bottom=self.y - self.height * 0.5,
             right=self.x + self.width * 0.5,
-            bottom=self.y + self.height * 0.5,
+            top=self.y + self.height * 0.5,
         )
 
-    def update(self, delta_seconds: float, world: World, app: GameApp) -> None:
+    def update(
+        self,
+        delta_seconds: float,
+        world: World,
+        app: GameApp,
+    ) -> None:
         pass
 
     def draw(

@@ -48,10 +48,10 @@ class Projectile(Entity):
         margin = 100.0
         bounds = world.bounds
         outside_world = (
-            self.x < bounds.left - margin
-            or self.x > bounds.right + margin
-            or self.y < bounds.top - margin
-            or self.y > bounds.bottom + margin
+                self.x < bounds.left - margin
+                or self.x > bounds.right + margin
+                or self.y < bounds.bottom - margin
+                or self.y > bounds.top + margin
         )
 
         if self.remaining_lifetime <= 0.0 or outside_world:

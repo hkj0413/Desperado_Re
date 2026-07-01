@@ -10,21 +10,27 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class AABB:
+    """Axis-aligned world-space collision rectangle.
+
+    World coordinate convention:
+    - left < right
+    - bottom < top
+    """
+
     left: float
-    top: float
-    right: float
     bottom: float
+    right: float
+    top: float
 
     def intersects(self, other: AABB) -> bool:
         return not (
             self.right <= other.left
             or self.left >= other.right
-            or self.bottom <= other.top
-            or self.top >= other.bottom
+            or self.top <= other.bottom
+            or self.bottom >= other.top
         )
 
 
-# Keep this runtime alias free of TYPE_CHECKING-only imports.
 CollisionHandler = Callable[[Any, Any, Any, Any], None]
 
 
@@ -36,18 +42,24 @@ class CollisionRule:
 
 
 class CollisionSystem:
-    """Checks only explicitly registered collision category pairs.
-
-    This prevents the expensive and error-prone 'every object against every
-    other object' pattern. New enemies share the 'enemy' category instead of
-    creating a projectile pair name for every monster class.
-    """
+    """Checks only explicitly registered collision category pairs."""
 
     def __init__(self) -> None:
         self._rules: list[CollisionRule] = []
 
-    def register(self, group_a: str, group_b: str, handler: CollisionHandler) -> None:
-        self._rules.append(CollisionRule(group_a, group_b, handler))
+    def register(
+        self,
+        group_a: str,
+        group_b: str,
+        handler: CollisionHandler,
+    ) -> None:
+        self._rules.append(
+            CollisionRule(
+                group_a,
+                group_b,
+                handler,
+            )
+        )
 
     def check(self, world: World, app: Any) -> None:
         for rule in self._rules:
@@ -56,6 +68,7 @@ class CollisionSystem:
 
             for entity_a in group_a:
                 collider_a = entity_a.get_aabb()
+
                 if collider_a is None or not entity_a.alive:
                     continue
 
@@ -64,8 +77,14 @@ class CollisionSystem:
                         continue
 
                     collider_b = entity_b.get_aabb()
+
                     if collider_b is None:
                         continue
 
                     if collider_a.intersects(collider_b):
-                        rule.handler(entity_a, entity_b, world, app)
+                        rule.handler(
+                            entity_a,
+                            entity_b,
+                            world,
+                            app,
+                        )

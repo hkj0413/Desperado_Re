@@ -26,6 +26,11 @@
         ],
         "width": 48,
         "height": 80
+      },
+      "movement": {
+        "gravity": 2600.0,
+        "jump_speed": 940.0,
+        "max_fall_speed": 1400.0
       }
     }
   }

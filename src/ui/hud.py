@@ -28,7 +28,6 @@ class Hud:
         title_font = app.fonts.get(24, bold=True)
         body_font = app.fonts.get(18)
 
-        # Player health: screen coordinates, fixed in top-left.
         x, y, width, height = 32, 30, 270, 20
         ratio = player.hp / player.max_hp
         pygame.draw.rect(screen, (32, 32, 38), (x, y, width, height), border_radius=5)
@@ -56,18 +55,17 @@ class Hud:
         screen.blit(body_font.render(f'스킬  {skills}', True, (218, 223, 234)), (32, 94))
         screen.blit(body_font.render(f'인벤토리  {inventory}', True, (218, 223, 234)), (32, 120))
 
-        # Debug-friendly proof of coordinate separation:
-        # player.x/y = world position, camera.view_left/top = rendered world origin.
         coordinate_text = (
             f'월드 좌표  ({player.x:.0f}, {player.y:.0f})    '
-            f'카메라 좌표  ({camera.view_left:.0f}, {camera.view_top:.0f})'
+            f'카메라 좌표  ({camera.view_left:.0f}, {camera.view_bottom:.0f})'
+            f'착지: {"예" if player.is_grounded else "아니오"}'
         )
         screen.blit(
             body_font.render(coordinate_text, True, (166, 191, 222)),
             (32, 818),
         )
 
-        controls = 'A / D 또는 ← / → 이동   1 / 2 스킬   F5 데이터 리로드   ESC 메뉴'
+        controls = 'A / D 또는 ← / → 이동   ↑ / Space 점프   1 / 2 스킬   F5 데이터 리로드   ESC 메뉴'
         screen.blit(body_font.render(controls, True, (190, 198, 212)), (32, 848))
 
         if notice:
