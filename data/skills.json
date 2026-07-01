@@ -1,38 +1,12 @@
 {
   "schema_version": 1,
   "records": {
-    "handgun_shot": {
-      "display_name": "핸드건 사격",
-      "slot": 1,
-      "behavior_type": "projectile",
-      "cooldown_seconds": 0.18,
-      "resource_cost": {
-        "ammo_type": "handgun",
-        "amount": 1
-      },
-      "projectile": {
-        "damage": 18,
-        "speed": 980.0,
-        "lifetime_seconds": 1.2,
-        "pierce_count": 0,
-        "width": 16,
-        "height": 8,
-        "placeholder_color": [
-          255,
-          226,
-          102
-        ]
-      },
-      "presentation": {
-        "sound_key": "sfx_handgun_shot",
-        "effect_key": "fx_muzzle_handgun"
-      }
-    },
-    "shotgun_burst": {
-      "display_name": "샷건 산탄",
-      "slot": 2,
+    "hkcaws_basic_attack": {
+      "display_name": "HKCAWS 기본 사격",
+      "slot": "basic",
       "behavior_type": "projectile_spread",
       "cooldown_seconds": 0.75,
+      "attack_interval_seconds": 0.75,
       "resource_cost": {
         "ammo_type": "shotgun",
         "amount": 1
@@ -55,9 +29,43 @@
         "angle_degrees": 28.0
       },
       "presentation": {
-        "sound_key": "sfx_shotgun_burst",
-        "effect_key": "fx_muzzle_shotgun"
-      }
+        "sound_key": "sfx_hkcaws_basic",
+        "effect_key": "fx_muzzle_hkcaws"
+      },
+      "action_state": "attack",
+      "action_duration_seconds": 0.45,
+      "animation_name": "attack"
+    },
+    "r93_basic_attack": {
+      "display_name": "R93 기본 사격",
+      "slot": "basic",
+      "behavior_type": "projectile",
+      "cooldown_seconds": 0.45,
+      "attack_interval_seconds": 0.45,
+      "resource_cost": {
+        "ammo_type": "rifle",
+        "amount": 1
+      },
+      "projectile": {
+        "damage": 36,
+        "speed": 1450.0,
+        "lifetime_seconds": 1.2,
+        "pierce_count": 0,
+        "width": 16,
+        "height": 8,
+        "placeholder_color": [
+          190,
+          226,
+          255
+        ]
+      },
+      "presentation": {
+        "sound_key": "sfx_r93_basic",
+        "effect_key": "fx_muzzle_r93"
+      },
+      "action_state": "attack",
+      "action_duration_seconds": 0.28,
+      "animation_name": "attack"
     }
   }
 }

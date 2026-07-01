@@ -21,7 +21,8 @@
         "hp_bar_offset_y": 12
       },
       "rewards": {
-        "drop_table_id": "spore_basic"
+        "drop_table_id": "spore_basic",
+        "experience_reward": 10
       },
       "visual": {
         "sprite_key": "enemy_spore",
@@ -54,7 +55,8 @@
         "hp_bar_offset_y": 18
       },
       "rewards": {
-        "drop_table_id": "boss_stone_golem"
+        "drop_table_id": "boss_stone_golem",
+        "experience_reward": 100
       },
       "visual": {
         "sprite_key": "enemy_stone_golem",

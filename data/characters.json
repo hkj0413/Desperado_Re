@@ -1,36 +1,120 @@
 {
   "schema_version": 1,
+  "shared_settings": {
+    "collider": {
+      "width": 34,
+      "height": 68
+    },
+    "combat": {
+      "contact_invulnerability_seconds": 0.5
+    },
+    "movement": {
+      "gravity": 2600.0,
+      "jump_speed": 850.0,
+      "max_fall_speed": 1400.0,
+      "dash_speed_multiplier": 5.0,
+      "dash_duration_seconds": 0.1,
+      "dash_cooldown_seconds": 3.0
+    },
+    "respawn": {
+      "wait_seconds": 5.0
+    },
+    "party": {
+      "max_hp": 100,
+      "initial_hp": 100,
+      "initial_experience": 0,
+      "initial_level": 1,
+      "initial_enhancement_level": 0,
+      "starting_items": {
+        "small_heal": 2
+      }
+    }
+  },
   "records": {
-    "desperado": {
-      "display_name": "Desperado",
+    "hkcaws": {
+      "display_name": "HKCAWS",
       "stats": {
-        "max_hp": 100,
-        "move_speed": 420.0,
-        "contact_invulnerability_seconds": 0.6
+        "move_speed": 360.0,
+        "attack_speed_multiplier": 1.0
       },
-      "starting_loadout": {
-        "skill_ids": [
-          "handgun_shot",
-          "shotgun_burst"
-        ],
-        "items": {
-          "small_heal": 2
-        }
+      "ammo": {
+        "shotgun": 4
+      },
+      "abilities": {
+        "basic_attack_id": "hkcaws_basic_attack",
+        "skill_s_id": null,
+        "skill_d_id": null,
+        "main_unique_skill_id": null,
+        "main_ultimate_skill_id": null
       },
       "visual": {
-        "sprite_key": "player_desperado",
-        "placeholder_color": [
-          70,
-          170,
-          255
-        ],
-        "width": 48,
-        "height": 80
+        "directory": "assets/Character/HKCAWS",
+        "draw_width": 170,
+        "draw_height": 170,
+        "animations": {
+          "idle": {
+            "file_stem": "Idle_SG",
+            "fps": 8.0
+          },
+          "walk": {
+            "file_stem": "Walk_SG",
+            "fps": 12.0
+          },
+          "attack": {
+            "file_stem": "Attack_SG",
+            "fps": 12.0
+          },
+          "hit": {
+            "file_stem": "Hit_SG",
+            "fps": 8.0
+          }
+        },
+        "draw_offset_x": 0.0,
+        "draw_offset_y": 0.0,
+        "mirror_draw_offset_x_when_facing_left": true
+      }
+    },
+    "r93": {
+      "display_name": "R93",
+      "stats": {
+        "move_speed": 400.0,
+        "attack_speed_multiplier": 1.0
       },
-      "movement": {
-        "gravity": 2600.0,
-        "jump_speed": 940.0,
-        "max_fall_speed": 1400.0
+      "ammo": {
+        "rifle": 10
+      },
+      "abilities": {
+        "basic_attack_id": "r93_basic_attack",
+        "skill_s_id": null,
+        "skill_d_id": null,
+        "main_unique_skill_id": null,
+        "main_ultimate_skill_id": null
+      },
+      "visual": {
+        "directory": "assets/Character/R93",
+        "draw_width": 170,
+        "draw_height": 170,
+        "animations": {
+          "idle": {
+            "file_stem": "Idle_RF",
+            "fps": 8.0
+          },
+          "walk": {
+            "file_stem": "Walk_RF",
+            "fps": 12.0
+          },
+          "attack": {
+            "file_stem": "Attack_RF",
+            "fps": 12.0
+          },
+          "hit": {
+            "file_stem": "Hit_RF",
+            "fps": 8.0
+          }
+        },
+        "draw_offset_x": 0.0,
+        "draw_offset_y": 0.0,
+        "mirror_draw_offset_x_when_facing_left": true
       }
     }
   }

@@ -25,37 +25,30 @@ if TYPE_CHECKING:
 
 
 class PlayScene(Scene):
-    """Composes one stage and owns its camera.
-
-    - World, collision, and physics use WORLD coordinates.
-    - Camera converts world coordinates to screen coordinates only in draw().
-    - Terrain uses 20 x 20 grid tiles.
-    - Each tile uses Block (n).png selected in stages.json.
-    - Hud uses SCREEN coordinates and never scrolls.
-    """
+    """Composes one stage after main/sub selection."""
 
     def __init__(self, app: GameApp, stage_id: str) -> None:
         super().__init__(app)
-
         self.stage_id = stage_id
         self.world: World | None = None
         self.camera: Camera | None = None
         self.player: Player | None = None
-
         self.hud = Hud()
         self.notice = ''
         self._notice_until = 0.0
-
-        self.tile_size = 20
+        self.tile_size = 40
 
     def on_enter(self) -> None:
-        stage = self.app.data.record('stages', self.stage_id)
+        if self.app.party is None:
+            raise RuntimeError(
+                'PlayScene must be entered through CharacterSelectScene.'
+            )
 
+        stage = self.app.data.record('stages', self.stage_id)
         bounds = WorldBounds.from_mapping(stage['world_bounds'])
         self.world = World(bounds)
 
         viewport_width, viewport_height = self.app.screen.get_size()
-
         self.camera = Camera(
             viewport_width,
             viewport_height,
@@ -67,37 +60,18 @@ class PlayScene(Scene):
         block_directory = str(tiles_table['block_directory'])
 
         spawn = stage['player_spawn']
-
         self.player = create_player(
             self.app,
-            stage['player_character_id'],
+            self.app.party,
             float(spawn['x']),
             float(spawn['y']),
         )
-
         self.world.add(self.player)
 
-        # terrain_regions 하나는 cols × rows만큼 20 × 20 타일을 생성한다.
-        #
-        # 예:
-        # {
-        #   "kind": "floor",
-        #   "block": 1,
-        #   "col": 0,
-        #   "row": 36,
-        #   "cols": 320,
-        #   "rows": 9
-        # }
-        #
-        # 위 데이터는 Block (1).png를 320 × 9번 반복한다.
         for region in stage['terrain_regions']:
             kind = str(region['kind'])
             block_number = int(region['block'])
-
-            definition = self.app.data.record(
-                'tiles',
-                kind,
-            )
+            definition = self.app.data.record('tiles', kind)
 
             for row_offset in range(int(region['rows'])):
                 for col_offset in range(int(region['cols'])):
@@ -105,14 +79,10 @@ class PlayScene(Scene):
                     grid_row = int(region['row']) + row_offset
 
                     world_left = (
-                            bounds.left
-                            + grid_col * self.tile_size
+                        bounds.left + grid_col * self.tile_size
                     )
-
-                    # row 0은 월드 맨 아래다.
                     world_bottom = (
-                            bounds.bottom
-                            + grid_row * self.tile_size
+                        bounds.bottom + grid_row * self.tile_size
                     )
 
                     self.world.add(
@@ -150,7 +120,6 @@ class PlayScene(Scene):
             )
 
         portal = stage['portal']
-
         self.world.add(
             Portal(
                 float(portal['x']),
@@ -161,46 +130,43 @@ class PlayScene(Scene):
             )
         )
 
-        # floor / platform 충돌은 Player 내부에서 처리한다.
-        # 여기서는 아이템, 포탈, 투사체 충돌만 등록한다.
         self.world.collisions.register(
             'player',
             'item',
             self._on_player_item,
         )
-
         self.world.collisions.register(
             'player',
             'portal',
             self._on_player_portal,
         )
-
         self.world.collisions.register(
             'player_projectile',
             'enemy',
             self._on_projectile_enemy,
         )
+        self.world.collisions.register(
+            'player',
+            'enemy',
+            self._on_player_enemy,
+        )
 
         self.world.commit()
-
         self.camera.follow(self.player.x, self.player.y)
 
         self.set_notice(
-            'A/D 또는 ←/→ 이동 · ↑/Space 점프 · '
-            'floor는 전방향 충돌 · platform은 착지만 충돌',
+            '←/→ 이동 · Space 점프 · A 기본 공격 · Z 메인/서브 교체 · H 테두리 디버그',
             5.0,
         )
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             from src.scenes.main_menu_scene import MainMenuScene
-
             self.app.scene_manager.change(MainMenuScene)
             return
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F5:
             self.app.reload_data()
-
             self.set_notice(
                 'JSON 데이터테이블을 다시 읽었습니다. '
                 '현재 스테이지 배치는 다시 시작해야 적용됩니다.',
@@ -208,24 +174,40 @@ class PlayScene(Scene):
             )
             return
 
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_h:
+            self.app.debug_draw_actor_bounds = (
+                not self.app.debug_draw_actor_bounds
+            )
+            state = '켜짐' if self.app.debug_draw_actor_bounds else '꺼짐'
+            self.set_notice(
+                f'월드 액터 충돌 테두리: {state}',
+                1.2,
+            )
+            return
+
         if self.player is None:
             return
 
-        skill_result = self.player.handle_event(event, self.app)
-
-        if skill_result is None:
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_z:
+            # try_swap_character plays an effect only after a successful swap.
+            self.set_notice(
+                self.player.try_swap_character(self.app),
+                1.4,
+            )
             return
 
-        if skill_result in self.player.skill_ids:
-            self._spawn_skill(skill_result)
-        else:
-            self.set_notice(skill_result, 1.5)
+        result = self.player.handle_event(event, self.app)
+        self._spawn_pending_player_skills()
+
+        if result is not None:
+            self.set_notice(result, 1.5)
 
     def update(self, delta_seconds: float) -> None:
         if self.world is None or self.camera is None:
             return
 
         self.world.update(delta_seconds, self.app)
+        self._spawn_pending_player_skills()
 
         if self.player is not None and self.player.alive:
             self.camera.follow(self.player.x, self.player.y)
@@ -248,12 +230,19 @@ class PlayScene(Scene):
                 self.notice,
             )
 
+    def _spawn_pending_player_skills(self) -> None:
+        if self.player is None:
+            return
+
+        for skill_id in self.player.consume_pending_skill_ids():
+            self._spawn_skill(skill_id)
+
     def _spawn_skill(self, skill_id: str) -> None:
         if self.player is None or self.world is None:
             return
 
         skill = self.app.data.record('skills', skill_id)
-        behavior_type = skill['behavior_type']
+        behavior_type = str(skill['behavior_type'])
 
         if behavior_type.startswith('projectile'):
             self.world.add(
@@ -266,18 +255,51 @@ class PlayScene(Scene):
                     self.player.facing,
                 )
             )
-
-            self.set_notice(
-                f"{skill['display_name']} 사용",
-                0.7,
-            )
-
         else:
             self.set_notice(
                 f"{skill['display_name']}은(는) 아직 구현되지 않은 "
                 '행동 유형입니다.',
                 2.0,
             )
+
+    def _on_player_enemy(
+        self,
+        player: Player,
+        enemy: Enemy,
+        world: World,
+        app: GameApp,
+    ) -> None:
+        """Apply enemy contact damage.
+
+        Dash is stealth rather than ordinary invulnerability, so a dashing
+        player is ignored entirely: no hit, no projectile-like collision side
+        effect, and no enemy contact cooldown consumption.
+        """
+
+        if player.is_stealthed:
+            return
+
+        now = app.timer.game_time
+        if not enemy.can_contact_attack(now):
+            return
+
+        if not player.take_damage(enemy.contact_damage, app):
+            return
+
+        enemy.mark_contact_attack(now)
+
+        if player.hp <= 0:
+            self.set_notice(
+                f'{enemy.display_name} 접촉 피해 {enemy.contact_damage} · 사망',
+                1.2,
+            )
+            return
+
+        self.set_notice(
+            f'{enemy.display_name} 접촉 피해 {enemy.contact_damage} · '
+            '피격 경직',
+            0.9,
+        )
 
     def _on_player_item(
         self,
@@ -291,7 +313,6 @@ class PlayScene(Scene):
             1,
             item.definition,
         )
-
         world.remove(item)
         self.set_notice(message, 2.0)
 
@@ -315,17 +336,24 @@ class PlayScene(Scene):
         world: World,
         app: GameApp,
     ) -> None:
-        if projectile.register_enemy_hit(
-            enemy,
-            world,
-        ) and enemy.take_damage(
+        if self.player is None:
+            return
+
+        hit = projectile.register_enemy_hit(enemy, world) and enemy.take_damage(
             projectile.damage,
             app,
-        ):
-            self.set_notice(
-                f'{enemy.display_name}에게 {projectile.damage} 피해',
-                0.6,
-            )
+        )
+        if not hit:
+            return
+
+        message = f'{enemy.display_name}에게 {projectile.damage} 피해'
+
+        experience_reward = enemy.claim_experience_reward()
+        if experience_reward > 0:
+            total = self.player.add_experience(experience_reward)
+            message += f' · 공용 경험치 +{experience_reward} ({total})'
+
+        self.set_notice(message, 0.9)
 
     def set_notice(self, message: str, seconds: float) -> None:
         self.notice = message

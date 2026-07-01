@@ -3,20 +3,16 @@
   "records": {
     "prototype_stage": {
       "display_name": "Stage 1",
-      "player_character_id": "desperado",
-
       "world_bounds": {
         "left": 0,
         "bottom": 0,
         "right": 6400,
         "top": 900
       },
-
       "player_spawn": {
-        "x": 180,
-        "y": 120
+        "x": 120,
+        "y": 154
       },
-
       "terrain_regions": [
         {
           "kind": "floor",
@@ -24,18 +20,16 @@
           "col": 0,
           "row": 0,
           "cols": 160,
-          "rows": 2
+          "rows": 1
         },
-
         {
           "kind": "floor",
           "block": 2,
           "col": 0,
-          "row": 2,
+          "row": 1,
           "cols": 160,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -44,7 +38,6 @@
           "cols": 9,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -53,7 +46,6 @@
           "cols": 9,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -62,7 +54,6 @@
           "cols": 9,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -71,7 +62,6 @@
           "cols": 12,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -80,7 +70,6 @@
           "cols": 9,
           "rows": 1
         },
-
         {
           "kind": "platform",
           "block": 2,
@@ -90,7 +79,6 @@
           "rows": 1
         }
       ],
-
       "enemy_spawns": [
         {
           "enemy_id": "spore",
@@ -113,7 +101,6 @@
           "y": 140
         }
       ],
-
       "item_spawns": [
         {
           "item_id": "small_heal",
@@ -136,7 +123,6 @@
           "y": 93
         }
       ],
-
       "portal": {
         "x": 6200,
         "y": 115,

@@ -13,5 +13,8 @@
   "runtime": {
     "target_fps": 120,
     "max_delta_seconds": 0.05
+  },
+  "party": {
+    "max_selectable_characters": 4
   }
 }

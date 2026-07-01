@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "records": {
+    "switch_to_sub": {
+      "display_name": "서브 캐릭터 교체",
+      "category": "effect",
+      "path": "assets/Sound/Effect/SwitchToSub.mp3",
+      "volume": 0.8
+    },
+    "switch_to_main": {
+      "display_name": "메인 캐릭터 교체",
+      "category": "effect",
+      "path": "assets/Sound/Effect/SwitchToMain.mp3",
+      "volume": 0.8
+    }
+  }
+}

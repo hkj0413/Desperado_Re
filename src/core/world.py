@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Iterable
 
+import pygame
+
 from src.core.camera import Camera, WorldBounds
 from src.core.collision import CollisionSystem
 
@@ -60,9 +62,46 @@ class World:
         self.commit()
 
     def draw(self, screen: pygame.Surface, app: GameApp, camera: Camera) -> None:
+        # First render every world actor in its normal layer order.
+        visible_entities: list[Entity] = []
+
         for entity in sorted(self._entities, key=lambda item: item.layer):
-            if entity.alive:
-                entity.draw(screen, self, app, camera)
+            if not entity.alive:
+                continue
+
+            entity.draw(screen, self, app, camera)
+            visible_entities.append(entity)
+
+        # The debug rectangles are deliberately drawn after *all* world actors,
+        # so the red borders sit on top of players, terrain, enemies, items,
+        # portals, and projectiles. Hud is not part of World.draw().
+        if app.debug_draw_actor_bounds:
+            for entity in visible_entities:
+                self._draw_debug_actor_bounds(screen, entity, camera)
+
+    @staticmethod
+    def _draw_debug_actor_bounds(
+        screen: pygame.Surface,
+        entity: Entity,
+        camera: Camera,
+    ) -> None:
+        """Draw an actor's real world-space width/height box in red."""
+
+        if not camera.is_world_rect_visible(
+            entity.x,
+            entity.y,
+            entity.width,
+            entity.height,
+        ):
+            return
+
+        rect = camera.rect_from_world_center(
+            entity.x,
+            entity.y,
+            entity.width,
+            entity.height,
+        )
+        pygame.draw.rect(screen, (255, 0, 0), rect, width=2)
 
     def entities_with_group(self, group: str) -> Iterable[Entity]:
         return (
