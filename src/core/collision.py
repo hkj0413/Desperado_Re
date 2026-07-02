@@ -42,7 +42,7 @@ class CollisionRule:
 
 
 class CollisionSystem:
-    """Checks only explicitly registered collision category pairs."""
+    """Checks explicitly registered category pairs through a spatial hash."""
 
     def __init__(self) -> None:
         self._rules: list[CollisionRule] = []
@@ -62,22 +62,41 @@ class CollisionSystem:
         )
 
     def check(self, world: World, app: Any) -> None:
+        if not self._rules:
+            return
+
+        # Entity positions are final for this frame at this point. Rebuilding
+        # a tiny grid is far cheaper than testing every projectile against every
+        # enemy as projectile and enemy counts rise.
+        groups = {
+            group
+            for rule in self._rules
+            for group in (rule.group_a, rule.group_b)
+        }
+        world.rebuild_collision_index(groups)
+
         for rule in self._rules:
-            group_a = tuple(world.entities_with_group(rule.group_a))
-            group_b = tuple(world.entities_with_group(rule.group_b))
+            group_a = world.entities_with_group(rule.group_a)
 
             for entity_a in group_a:
-                collider_a = entity_a.get_aabb()
-
-                if collider_a is None or not entity_a.alive:
+                if (
+                    not entity_a.alive
+                    or not world.is_collision_active(entity_a)
+                ):
                     continue
 
-                for entity_b in group_b:
+                collider_a = entity_a.get_aabb()
+                if collider_a is None:
+                    continue
+
+                for entity_b in world.collision_candidates(
+                    rule.group_b,
+                    collider_a,
+                ):
                     if entity_a is entity_b or not entity_b.alive:
                         continue
 
                     collider_b = entity_b.get_aabb()
-
                     if collider_b is None:
                         continue
 

@@ -61,11 +61,21 @@ class GameApp:
         """
 
         from src.gameplay.character_assets import CharacterSpriteCache
+        from src.gameplay.enemy_assets import EnemySpriteCache
         from src.gameplay.entities.terrain import TerrainBlock
+        from src.gameplay.projectile_assets import ProjectileSpriteCache
 
         CharacterSpriteCache.preload_all(
             self,
             self.data.records('characters'),
+        )
+        EnemySpriteCache.preload_all(
+            self,
+            self.data.records('enemies'),
+        )
+        ProjectileSpriteCache.preload_all(
+            self,
+            self.data.records('skills'),
         )
         TerrainBlock.preload_all_stage_blocks(self)
 
@@ -120,11 +130,15 @@ class GameApp:
     def reload_data(self) -> None:
         """F5 development reload for data tables and runtime asset caches."""
         from src.gameplay.character_assets import CharacterSpriteCache
+        from src.gameplay.enemy_assets import EnemySpriteCache
         from src.gameplay.entities.terrain import TerrainBlock
+        from src.gameplay.projectile_assets import ProjectileSpriteCache
 
         self.data.reload_all()
         self.audio.clear_cache()
         CharacterSpriteCache.clear_cache()
+        EnemySpriteCache.clear_cache()
+        ProjectileSpriteCache.clear_cache()
         TerrainBlock.clear_cache()
         self._preload_visual_assets()
 

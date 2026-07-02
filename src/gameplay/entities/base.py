@@ -21,7 +21,13 @@ class Entity:
     - +y goes up
 
     x and y are always world-space center coordinates.
+
+    Static entities such as terrain, item drops, and portals do not need an
+    update call every frame. Subclasses with runtime simulation opt in by
+    setting ``updates_each_frame = True``.
     """
+
+    updates_each_frame = False
 
     def __init__(
         self,

@@ -28,6 +28,10 @@
       "starting_items": {
         "small_heal": 2
       }
+    },
+    "visual_defaults": {
+      "draw_offset_x": 0.0,
+      "draw_offset_y": -34.0
     }
   },
   "records": {
@@ -38,7 +42,7 @@
         "attack_speed_multiplier": 1.0
       },
       "ammo": {
-        "shotgun": 4
+        "shotgun": 12
       },
       "abilities": {
         "basic_attack_id": "hkcaws_basic_attack",
@@ -54,7 +58,7 @@
         "animations": {
           "idle": {
             "file_stem": "Idle_SG",
-            "fps": 8.0
+            "fps": 12.0
           },
           "walk": {
             "file_stem": "Walk_SG",
@@ -66,12 +70,21 @@
           },
           "hit": {
             "file_stem": "Hit_SG",
-            "fps": 8.0
+            "fps": 12.0
+          },
+          "reload": {
+            "file_stem": "Reload_SG",
+            "fps": 12.0
           }
-        },
-        "draw_offset_x": 0.0,
-        "draw_offset_y": -34.0,
-        "mirror_draw_offset_x_when_facing_left": true
+        }
+      },
+      "reload": {
+        "mode": "standard",
+        "action_duration_seconds": 1.43,
+        "animation_name": "reload"
+      },
+      "combat_rules": {
+        "attack_requires_idle_grounded": false
       }
     },
     "r93": {
@@ -81,7 +94,7 @@
         "attack_speed_multiplier": 1.0
       },
       "ammo": {
-        "rifle": 10
+        "rifle": 4
       },
       "abilities": {
         "basic_attack_id": "r93_basic_attack",
@@ -97,7 +110,7 @@
         "animations": {
           "idle": {
             "file_stem": "Idle_RF",
-            "fps": 8.0
+            "fps": 12.0
           },
           "walk": {
             "file_stem": "Walk_RF",
@@ -109,12 +122,22 @@
           },
           "hit": {
             "file_stem": "Hit_RF",
-            "fps": 8.0
+            "fps": 12.0
           }
-        },
-        "draw_offset_x": 0.0,
-        "draw_offset_y": -34.0,
-        "mirror_draw_offset_x_when_facing_left": true
+        }
+      },
+      "reload": {
+        "mode": "recoil_projectile",
+        "action_duration_seconds": 0.4,
+        "release_delay_seconds": 0.15,
+        "animation_name": "attack",
+        "projectile_skill_id": "r93_reload_projectile",
+        "recoil_speed_multiplier": 2,
+        "jump_speed_multiplier": 0.5,
+        "requires_empty_magazine": true
+      },
+      "combat_rules": {
+        "attack_requires_idle_grounded": true
       }
     }
   }

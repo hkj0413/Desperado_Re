@@ -120,13 +120,10 @@ class CharacterSpriteCache:
         offset_x += float(animation.get('draw_offset_x', 0.0))
         offset_y += float(animation.get('draw_offset_y', 0.0))
 
-        mirror_x = bool(
-            visual.get(
-                'mirror_draw_offset_x_when_facing_left',
-                True,
-            )
-        )
-        if facing < 0 and mirror_x:
+        # Horizontal visual corrections always mirror with the character.
+        # This is a project-wide rule, so JSON has no per-character mirror
+        # switch to accidentally turn off.
+        if facing < 0:
             offset_x = -offset_x
 
         return offset_x, offset_y

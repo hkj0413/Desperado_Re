@@ -57,6 +57,7 @@ class PlayScene(Scene):
 
         tiles_table = self.app.data.table('tiles')
         self.tile_size = int(tiles_table['tile_size'])
+        self.world.configure_terrain_grid(self.tile_size)
         block_directory = str(tiles_table['block_directory'])
 
         spawn = stage['player_spawn']
@@ -146,6 +147,11 @@ class PlayScene(Scene):
             self._on_projectile_enemy,
         )
         self.world.collisions.register(
+            'enemy_projectile',
+            'player',
+            self._on_enemy_projectile_player,
+        )
+        self.world.collisions.register(
             'player',
             'enemy',
             self._on_player_enemy,
@@ -155,7 +161,7 @@ class PlayScene(Scene):
         self.camera.follow(self.player.x, self.player.y)
 
         self.set_notice(
-            '←/→ 이동 · Space 점프 · A 기본 공격 · Z 메인/서브 교체 · H 테두리 디버그',
+            '←/→ 이동 · ↑ 점프 · Space 대시 · R 장전 · A 기본 공격 · Z 교체',
             5.0,
         )
 
@@ -180,7 +186,7 @@ class PlayScene(Scene):
             )
             state = '켜짐' if self.app.debug_draw_actor_bounds else '꺼짐'
             self.set_notice(
-                f'월드 액터 충돌 테두리: {state}',
+                f'범위/충돌 테두리 디버그: {state}',
                 1.2,
             )
             return
@@ -208,6 +214,7 @@ class PlayScene(Scene):
 
         self.world.update(delta_seconds, self.app)
         self._spawn_pending_player_skills()
+        self._spawn_pending_enemy_skills()
 
         if self.player is not None and self.player.alive:
             self.camera.follow(self.player.x, self.player.y)
@@ -237,7 +244,55 @@ class PlayScene(Scene):
         for skill_id in self.player.consume_pending_skill_ids():
             self._spawn_skill(skill_id)
 
-    def _spawn_skill(self, skill_id: str) -> None:
+        for skill_id, direction in (
+            self.player.consume_pending_projectile_requests()
+        ):
+            self._spawn_skill(skill_id, direction)
+
+    def _spawn_pending_enemy_skills(self) -> None:
+        if self.world is None:
+            return
+
+        # Enemy.update() queues only attacks that actually started this frame.
+        # Draining that queue replaces the old second scan of every enemy.
+        for enemy, skill_id, direction in (
+            self.world.consume_enemy_attack_requests()
+        ):
+            if isinstance(enemy, Enemy) and enemy.alive:
+                self._spawn_enemy_skill(enemy, skill_id, direction)
+
+    def _spawn_enemy_skill(
+        self,
+        enemy: Enemy,
+        skill_id: str,
+        direction: int,
+    ) -> None:
+        if self.world is None:
+            return
+
+        skill = self.app.data.record('skills', skill_id)
+        behavior_type = str(skill['behavior_type'])
+
+        if not behavior_type.startswith('projectile'):
+            return
+
+        projectile_direction = 1 if direction >= 0 else -1
+        self.world.add(
+            Projectile(
+                skill_id,
+                skill,
+                enemy.x + projectile_direction * (enemy.width * 0.55),
+                enemy.y,
+                projectile_direction,
+                collision_group='enemy_projectile',
+            )
+        )
+
+    def _spawn_skill(
+        self,
+        skill_id: str,
+        direction: int | None = None,
+    ) -> None:
         if self.player is None or self.world is None:
             return
 
@@ -245,14 +300,19 @@ class PlayScene(Scene):
         behavior_type = str(skill['behavior_type'])
 
         if behavior_type.startswith('projectile'):
+            projectile_direction = (
+                self.player.facing
+                if direction is None
+                else (1 if direction >= 0 else -1)
+            )
             self.world.add(
                 Projectile(
                     skill_id,
                     skill,
                     self.player.x
-                    + self.player.facing * (self.player.width * 0.55),
+                    + projectile_direction * (self.player.width * 0.55),
                     self.player.y,
-                    self.player.facing,
+                    projectile_direction,
                 )
             )
         else:
@@ -260,6 +320,29 @@ class PlayScene(Scene):
                 f"{skill['display_name']}은(는) 아직 구현되지 않은 "
                 '행동 유형입니다.',
                 2.0,
+            )
+
+    def _on_enemy_projectile_player(
+        self,
+        projectile: Projectile,
+        player: Player,
+        world: World,
+        app: GameApp,
+    ) -> None:
+        # Dash stealth removes the player as a target entirely. The projectile
+        # passes through and keeps travelling.
+        if player.is_stealthed:
+            return
+
+        # Normal post-hit invulnerability is not stealth: the projectile hits
+        # and is consumed, but Player.take_damage() prevents HP/stagger changes.
+        if not projectile.register_target_hit(player, world):
+            return
+
+        if player.take_damage(projectile.damage, app):
+            self.set_notice(
+                f'적 투사체 피해 {projectile.damage} · 피격 경직',
+                0.9,
             )
 
     def _on_player_enemy(
@@ -339,11 +422,31 @@ class PlayScene(Scene):
         if self.player is None:
             return
 
-        hit = projectile.register_enemy_hit(enemy, world) and enemy.take_damage(
-            projectile.damage,
-            app,
-        )
-        if not hit:
+        # Hit-stunned, dead, and respawn-waiting monsters are deliberately
+        # removed from the player attack target list. The projectile therefore
+        # passes through without spending its hit count. Stunned monsters remain
+        # targetable and can still be damaged.
+        if not enemy.can_be_targeted_by_player(app.timer.game_time):
+            return
+
+        if not projectile.register_enemy_hit(enemy, world):
+            return
+
+        # R93's recoil reload projectile is intentionally non-damaging. It
+        # carries a stun value instead, just like the previous Desperado
+        # ReloadRF object. Normal player bullets continue through damage flow.
+        if projectile.damage <= 0:
+            if projectile.stun_seconds > 0.0 and enemy.apply_stun(
+                projectile.stun_seconds,
+                app,
+            ):
+                self.set_notice(
+                    f'{enemy.display_name} 기절 {projectile.stun_seconds:.1f}초',
+                    0.8,
+                )
+            return
+
+        if not enemy.take_damage(projectile.damage, app):
             return
 
         message = f'{enemy.display_name}에게 {projectile.damage} 피해'

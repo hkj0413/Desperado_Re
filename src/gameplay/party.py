@@ -10,6 +10,7 @@ CharacterActionState = Literal[
     'walk',
     'attack',
     'skill',
+    'reload',
     'dash',
     'jump',
     'fall',
@@ -17,6 +18,24 @@ CharacterActionState = Literal[
     'dead',
     'respawn_wait',
 ]
+
+
+@dataclass
+class ReloadRuntime:
+    """One active reload action for the current character.
+
+    ``release_at`` is used by recoil-projectile reloads. Standard reloads set
+    it to ``None`` and simply restore the magazine when their animation/action
+    time ends.
+    """
+
+    mode: str
+    direction: int
+    release_at: float | None
+    projectile_skill_id: str | None
+    recoil_speed: float
+    jump_speed: float
+    released: bool = False
 
 
 @dataclass
@@ -30,6 +49,7 @@ class CharacterRuntimeState:
 
     character_id: str
     ammo: dict[str, int]
+    max_ammo: dict[str, int]
     cooldown_ready_at: dict[str, float] = field(default_factory=dict)
 
     animation_name: str = 'idle'
@@ -44,6 +64,8 @@ class CharacterRuntimeState:
 
     dash_active_until: float = 0.0
     dash_direction: int = 1
+
+    reload: ReloadRuntime | None = None
 
     # Reserved for later values that truly belong to this one character only.
     status: dict[str, Any] = field(default_factory=dict)
@@ -76,6 +98,21 @@ class PartyManager:
         }
         self._item_definitions = deepcopy(item_definitions)
         self.shared_settings = deepcopy(shared_settings)
+
+        # Every character inherits the common visual alignment. A character may
+        # still override these two numbers in its own visual block, while a
+        # specific animation can add a further state-only adjustment.
+        visual_defaults = self.shared_settings.get('visual_defaults', {})
+        for definition in self._definitions.values():
+            visual = definition['visual']
+            visual.setdefault(
+                'draw_offset_x',
+                float(visual_defaults.get('draw_offset_x', 0.0)),
+            )
+            visual.setdefault(
+                'draw_offset_y',
+                float(visual_defaults.get('draw_offset_y', -34.0)),
+            )
 
         self._members: dict[PartySlot, CharacterRuntimeState] = {
             'main': self._make_runtime_state(
@@ -193,12 +230,7 @@ class PartyManager:
         return self.shared_enhancement_level
 
     def start_shared_respawn_wait(self, now: float) -> float:
-        """Start one party-wide respawn countdown.
-
-        Both selected members become unavailable while the countdown runs.
-        Character-specific ammunition and skill cooldowns are intentionally
-        preserved; only transient action / hit / dash state is reset on respawn.
-        """
+        """Start one party-wide respawn countdown."""
 
         self.shared_respawn_ready_at = now + self.respawn_wait_seconds
 
@@ -207,6 +239,7 @@ class PartyManager:
             runtime.action_locked_until = float('inf')
             runtime.hit_invulnerable_until = 0.0
             runtime.dash_active_until = 0.0
+            runtime.reload = None
             runtime.animation_name = 'idle'
             runtime.animation_elapsed = 0.0
             runtime.animation_playback_speed = 1.0
@@ -232,6 +265,7 @@ class PartyManager:
             runtime.action_locked_until = 0.0
             runtime.hit_invulnerable_until = 0.0
             runtime.dash_active_until = 0.0
+            runtime.reload = None
             runtime.animation_name = 'idle'
             runtime.animation_elapsed = 0.0
             runtime.animation_playback_speed = 1.0
@@ -309,10 +343,15 @@ class PartyManager:
         definition: dict[str, Any],
     ) -> CharacterRuntimeState:
         stats = definition['stats']
+        max_ammo = {
+            str(ammo_type): max(0, int(amount))
+            for ammo_type, amount in definition['ammo'].items()
+        }
 
         return CharacterRuntimeState(
             character_id=character_id,
-            ammo=dict(definition['ammo']),
+            ammo=dict(max_ammo),
+            max_ammo=max_ammo,
             attack_speed_multiplier=max(
                 0.01,
                 float(stats.get('attack_speed_multiplier', 1.0)),

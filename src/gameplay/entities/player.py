@@ -7,7 +7,7 @@ import pygame
 from src.gameplay.character_assets import CharacterSpriteCache
 from src.gameplay.entities.base import Entity
 from src.gameplay.entities.terrain import TerrainBlock
-from src.gameplay.party import CharacterActionState, PartyManager
+from src.gameplay.party import CharacterActionState, PartyManager, ReloadRuntime
 
 if TYPE_CHECKING:
     from src.app import GameApp
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 class Player(Entity):
+    updates_each_frame = True
     """The currently active party member in the world.
 
     Shared by the selected pair:
@@ -35,6 +36,7 @@ class Player(Entity):
 
     _COLLISION_EPSILON = 0.001
     _ACTION_ALLOWED_STATES = frozenset(('idle', 'walk'))
+    _RELOAD_ALLOWED_STATES = frozenset(('idle', 'walk'))
     _SWAP_ALLOWED_STATES = frozenset(('idle', 'walk'))
     _DASH_CANCEL_ALLOWED_STATES = frozenset(
         ('idle', 'walk', 'jump', 'fall', 'attack', 'skill', 'hit')
@@ -68,6 +70,7 @@ class Player(Entity):
 
         self._left_held = False
         self._right_held = False
+        self._down_held = False
         self._jump_requested = False
         self._basic_attack_held = False
         self.velocity_y = 0.0
@@ -80,6 +83,9 @@ class Player(Entity):
         # PlayScene drains this list and spawns actual projectile entities.
         # Player owns input/timing/state; the scene owns adding world entities.
         self._pending_skill_ids: list[str] = []
+        # Reload effects may use a direction captured at reload start, not the
+        # possibly changed shared facing at release time.
+        self._pending_projectile_requests: list[tuple[str, int]] = []
 
         self._apply_active_character_definition()
 
@@ -168,6 +174,19 @@ class Player(Entity):
         event: pygame.event.Event,
         app: GameApp,
     ) -> str | None:
+        """Handle only gameplay controls.
+
+        ← / → : horizontal movement
+        ↑     : jump
+        ↓     : held modifier for the R93 stationary reload
+        Space : dash
+        A     : basic attack
+        S / D : skills
+        X     : main-only unique skill
+        C     : main-only ultimate
+        R     : reload
+        """
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_LEFT:
                 self._left_held = True
@@ -177,9 +196,16 @@ class Player(Entity):
                 self._right_held = True
                 return None
 
-            if event.key == pygame.K_SPACE:
+            if event.key == pygame.K_DOWN:
+                self._down_held = True
+                return None
+
+            if event.key == pygame.K_UP:
                 self._jump_requested = True
                 return None
+
+            if event.key == pygame.K_SPACE:
+                return self.try_dash(app)
 
             if event.key == pygame.K_a:
                 self._basic_attack_held = True
@@ -194,8 +220,11 @@ class Player(Entity):
             if event.key == pygame.K_x:
                 return self.try_activate_ability('main_unique', app)
 
-            if event.key == pygame.K_f:
+            if event.key == pygame.K_c:
                 return self.try_activate_ability('main_ultimate', app)
+
+            if event.key == pygame.K_r:
+                return self.try_reload(app)
 
             if event.key == pygame.K_w:
                 return self.try_use_selected_hotbar_item(app)
@@ -206,15 +235,15 @@ class Player(Entity):
             if event.key == pygame.K_e:
                 return self._move_hotbar_cursor(1)
 
-            if event.key == pygame.K_LSHIFT:
-                return self.try_dash(app)
-
         elif event.type == pygame.KEYUP:
             if event.key == pygame.K_LEFT:
                 self._left_held = False
 
             elif event.key == pygame.K_RIGHT:
                 self._right_held = False
+
+            elif event.key == pygame.K_DOWN:
+                self._down_held = False
 
             elif event.key == pygame.K_a:
                 self._basic_attack_held = False
@@ -268,7 +297,7 @@ class Player(Entity):
                 'skill_s': 'S 스킬',
                 'skill_d': 'D 스킬',
                 'main_unique': 'X 고유 스킬',
-                'main_ultimate': 'F 궁극기',
+                'main_ultimate': 'C 궁극기',
             }
             return None if quiet_when_blocked else (
                 f"{labels.get(binding, '기본 공격')}이(가) 아직 배정되지 않았습니다."
@@ -340,6 +369,136 @@ class Player(Entity):
 
         return '대시'
 
+    def try_reload(self, app: GameApp) -> str:
+        """Reload the active character's personal magazine with R.
+
+        HKCAWS uses a normal locked Reload_SG animation. R93 uses the old
+        recoil-reload rule: after a short release delay it fires a reload
+        projectile and makes a small jump. Holding ↓ when R is pressed keeps
+        the jump in place; otherwise the character also recoils backward.
+        """
+
+        now = app.timer.game_time
+        self._refresh_temporary_action_state(now)
+        runtime = self.party.active_runtime
+
+        if self.party.shared_hp <= 0 or runtime.action_state == 'dead':
+            return '사망 상태에서는 장전할 수 없습니다.'
+
+        if self.party.is_respawning or runtime.action_state == 'respawn_wait':
+            return '리스폰 대기 상태에서는 장전할 수 없습니다.'
+
+        if runtime.action_state not in self._RELOAD_ALLOWED_STATES:
+            return '현재 행동 중에는 장전할 수 없습니다.'
+
+        reload_definition = self._definition['reload']
+
+        if bool(reload_definition.get('requires_empty_magazine', False)):
+            if any(
+                runtime.ammo.get(ammo_type, 0) > 0
+                for ammo_type in runtime.max_ammo
+            ):
+                return '이 캐릭터는 탄창이 비었을 때만 장전할 수 있습니다.'
+
+        if not any(
+            runtime.ammo.get(ammo_type, 0) < maximum
+            for ammo_type, maximum in runtime.max_ammo.items()
+        ):
+            return '탄약이 이미 가득 찼습니다.'
+
+        mode = str(reload_definition['mode'])
+        duration = float(reload_definition['action_duration_seconds'])
+        animation_name = str(reload_definition['animation_name'])
+
+        direction = self.facing
+        release_at: float | None = None
+        projectile_skill_id: str | None = None
+        recoil_speed = 0.0
+        jump_speed = 0.0
+
+        if mode == 'recoil_projectile':
+            release_at = now + float(
+                reload_definition['release_delay_seconds']
+            )
+            projectile_skill_id = str(
+                reload_definition['projectile_skill_id']
+            )
+            jump_speed = self.jump_speed * float(
+                reload_definition['jump_speed_multiplier']
+            )
+
+            # ↓ is sampled at the moment R is pressed. Releasing ↓ afterward
+            # does not turn a stationary reload into a backward recoil.
+            if not self._down_held:
+                recoil_speed = self.move_speed * float(
+                    reload_definition['recoil_speed_multiplier']
+                )
+
+        runtime.reload = ReloadRuntime(
+            mode=mode,
+            direction=direction,
+            release_at=release_at,
+            projectile_skill_id=projectile_skill_id,
+            recoil_speed=recoil_speed,
+            jump_speed=jump_speed,
+        )
+
+        self.begin_action(
+            'reload',
+            duration,
+            now,
+            app,
+            animation_name=animation_name,
+        )
+
+        if mode == 'recoil_projectile':
+            return (
+                '반동 장전 준비 · ↓를 누른 채 시작하면 제자리 점프'
+                if self._down_held
+                else '반동 장전 준비'
+            )
+
+        return '장전'
+
+    def _advance_reload(self, now: float) -> None:
+        """Release a delayed recoil reload exactly once."""
+
+        runtime = self.party.active_runtime
+        reload_state = runtime.reload
+
+        if (
+            runtime.action_state != 'reload'
+            or reload_state is None
+            or reload_state.released
+            or reload_state.release_at is None
+            or now < reload_state.release_at
+        ):
+            return
+
+        reload_state.released = True
+
+        if reload_state.projectile_skill_id is not None:
+            self._pending_projectile_requests.append(
+                (
+                    reload_state.projectile_skill_id,
+                    reload_state.direction,
+                )
+            )
+
+        # The old R93 reload performs a small upward kick in both variants.
+        # Only the non-↓ variant also receives horizontal backward recoil.
+        if reload_state.jump_speed > 0.0:
+            self.velocity_y = max(self.velocity_y, reload_state.jump_speed)
+            self.is_grounded = False
+
+    def _finish_reload(self) -> None:
+        """Complete a successful reload by restoring this character's magazine."""
+
+        runtime = self.party.active_runtime
+        for ammo_type, maximum in runtime.max_ammo.items():
+            runtime.ammo[ammo_type] = maximum
+        runtime.reload = None
+
     def try_use_selected_hotbar_item(self, app: GameApp) -> str | None:
         """Use the currently selected shared item with W.
 
@@ -406,12 +565,36 @@ class Player(Entity):
         self._refresh_temporary_action_state(now)
 
         runtime = self.party.active_runtime
+
         if runtime.action_state not in self._ACTION_ALLOWED_STATES:
             return None if quiet_when_blocked else (
                 '현재 행동 중에는 스킬을 사용할 수 없습니다.'
             )
 
         skill = app.data.record('skills', skill_id)
+
+        # R93-style characters may require every attack-type action to begin
+        # from a fully idle grounded state. Future skills with action_state
+        # "attack" inherit the same rule without a character-id branch.
+        if (
+            bool(
+                self._definition.get('combat_rules', {}).get(
+                    'attack_requires_idle_grounded',
+                    False,
+                )
+            )
+            and str(skill['action_state']) == 'attack'
+            and (
+                runtime.action_state != 'idle'
+                or not self.is_grounded
+                or self._left_held
+                or self._right_held
+            )
+        ):
+            return None if quiet_when_blocked else (
+                '이 캐릭터는 대기 상태에서만 공격할 수 있습니다.'
+            )
+
         cooldown_seconds = float(skill['cooldown_seconds'])
         action_duration = float(skill['action_duration_seconds'])
 
@@ -485,9 +668,9 @@ class Player(Entity):
     ) -> None:
         """Start a swap-blocking action and fit its animation to that duration."""
 
-        if action_state not in ('attack', 'skill'):
+        if action_state not in ('attack', 'skill', 'reload'):
             raise ValueError(
-                'action_state must be "attack" or "skill".'
+                'action_state must be "attack", "skill", or "reload".'
             )
 
         runtime = self.party.active_runtime
@@ -519,6 +702,13 @@ class Player(Entity):
         self._pending_skill_ids.clear()
         return pending
 
+    def consume_pending_projectile_requests(self) -> tuple[tuple[str, int], ...]:
+        """Return delayed projectiles with the direction captured on release."""
+
+        pending = tuple(self._pending_projectile_requests)
+        self._pending_projectile_requests.clear()
+        return pending
+
     def take_damage(self, amount: int, app: GameApp) -> bool:
         """Apply contact/projectile damage unless dash-stealthed or invulnerable.
 
@@ -544,6 +734,11 @@ class Player(Entity):
             return False
 
         self.party.apply_damage(damage)
+
+        # A real hit interrupts a reload before its release moment. This keeps
+        # an un-fired recoil projectile from appearing after the character was
+        # already knocked into hit-stun.
+        runtime.reload = None
 
         invulnerability_seconds = max(
             0.0,
@@ -626,8 +821,14 @@ class Player(Entity):
         effect = item_definition.get('effect', {})
         if effect.get('effect_type') == 'add_ammo':
             ammo_type = str(effect['ammo_type'])
-            added = int(effect['amount']) * max(0, int(amount))
-            self.ammo[ammo_type] = self.ammo.get(ammo_type, 0) + added
+            requested = int(effect['amount']) * max(0, int(amount))
+            maximum = self.party.active_runtime.max_ammo.get(ammo_type)
+            current = self.ammo.get(ammo_type, 0)
+            added = requested if maximum is None else max(
+                0,
+                min(requested, maximum - current),
+            )
+            self.ammo[ammo_type] = current + added
             return (
                 f"{item_definition['display_name']} "
                 f'+{added} ({ammo_type}, {self.display_name})'
@@ -653,12 +854,6 @@ class Player(Entity):
         world: World,
         app: GameApp,
     ) -> None:
-        terrain = tuple(
-            entity
-            for entity in world.entities_with_group('terrain')
-            if isinstance(entity, TerrainBlock)
-        )
-
         direction = int(self._right_held) - int(self._left_held)
         now = app.timer.game_time
 
@@ -667,6 +862,7 @@ class Player(Entity):
             self._update_animation(delta_seconds, direction)
             return
 
+        self._advance_reload(now)
         self._refresh_temporary_action_state(now)
 
         # Holding A repeatedly fires only as soon as the basic attack interval
@@ -696,26 +892,72 @@ class Player(Entity):
                 self.party.active_runtime.dash_direction
                 * dash_speed
                 * delta_seconds,
-                terrain,
+                world,
             )
-        elif not movement_inputs_locked and direction != 0:
+
+        elif self.action_state == 'reload':
+            # HKCAWS's standard reload remains an action state but permits
+            # normal horizontal movement and jumping. R93's recoil reload does
+            # not accept movement input; after release it supplies only its own
+            # scripted backward impulse.
+            reload_state = self.party.active_runtime.reload
+            if (
+                reload_state is not None
+                and reload_state.mode == 'standard'
+                and not movement_inputs_locked
+                and direction != 0
+            ):
+                self.facing = direction
+                self._move_horizontally(
+                    direction * self.move_speed * delta_seconds,
+                    world,
+                )
+            elif (
+                reload_state is not None
+                and reload_state.released
+                and reload_state.recoil_speed > 0.0
+            ):
+                self._move_horizontally(
+                    -reload_state.direction
+                    * reload_state.recoil_speed
+                    * delta_seconds,
+                    world,
+                )
+
+        elif (
+            self.action_state in self._ACTION_ALLOWED_STATES
+            and not movement_inputs_locked
+            and direction != 0
+        ):
+            # Basic attacks/skills deliberately do not enter this branch: an
+            # attack started while walking immediately stops movement and only
+            # resumes from held input after the action has finished.
             self.facing = direction
             self._move_horizontally(
                 direction * self.move_speed * delta_seconds,
-                terrain,
+                world,
             )
 
+        reload_state = self.party.active_runtime.reload
+        can_jump_while_reloading = (
+            self.action_state == 'reload'
+            and reload_state is not None
+            and reload_state.mode == 'standard'
+        )
         if (
             self._jump_requested
             and self.is_grounded
             and not movement_inputs_locked
-            and self.action_state in self._ACTION_ALLOWED_STATES
+            and (
+                self.action_state in self._ACTION_ALLOWED_STATES
+                or can_jump_while_reloading
+            )
         ):
             self.velocity_y = self.jump_speed
             self.is_grounded = False
             self._set_airborne_state('jump')
 
-        self._move_vertically(delta_seconds, terrain)
+        self._move_vertically(delta_seconds, world)
         self._clamp_to_world_bounds(world)
 
         self._jump_requested = False
@@ -752,6 +994,7 @@ class Player(Entity):
         labels = {
             'attack': '공격 중입니다.',
             'skill': '스킬 사용 중입니다.',
+            'reload': '장전 중입니다.',
             'dash': '대시 중입니다.',
             'jump': '점프 중입니다.',
             'fall': '추락 중입니다.',
@@ -768,11 +1011,20 @@ class Player(Entity):
     def _refresh_temporary_action_state(self, now: float) -> None:
         runtime = self.party.active_runtime
 
-        if runtime.action_state not in ('attack', 'skill', 'hit', 'dash'):
+        if runtime.action_state not in (
+            'attack',
+            'skill',
+            'reload',
+            'hit',
+            'dash',
+        ):
             return
 
         if now < runtime.action_locked_until:
             return
+
+        if runtime.action_state == 'reload':
+            self._finish_reload()
 
         # When a timed action finishes in the air, do not incorrectly return
         # to idle/walk. The player remains in jump or fall until terrain
@@ -811,7 +1063,8 @@ class Player(Entity):
             runtime.animation_playback_speed = 1.0
             return
 
-        # attack / skill / hit keeps its own animation until the action lock ends.
+        # attack / skill / reload / hit keeps its own animation until the
+        # action lock ends.
         runtime.animation_elapsed += delta_seconds
 
     def _set_airborne_state(self, state: str) -> None:
@@ -856,7 +1109,7 @@ class Player(Entity):
     def _move_horizontally(
         self,
         movement_x: float,
-        terrain: tuple[TerrainBlock, ...],
+        world: World,
     ) -> None:
         if movement_x == 0.0:
             return
@@ -865,7 +1118,14 @@ class Player(Entity):
         previous_right = self.right
         self.x += movement_x
 
-        for block in terrain:
+        # Only tiles crossed by this movement can block it. Querying the
+        # terrain grid here replaces the previous full-stage terrain scan.
+        query_left = min(previous_left, self.left)
+        query_right = max(previous_right, self.right)
+        for block in world.terrain_blocks_overlapping_x(
+            query_left,
+            query_right,
+        ):
             if not block.is_solid or not self._vertical_overlaps(block):
                 continue
 
@@ -888,7 +1148,7 @@ class Player(Entity):
     def _move_vertically(
         self,
         delta_seconds: float,
-        terrain: tuple[TerrainBlock, ...],
+        world: World,
     ) -> None:
         previous_top = self.top
         previous_bottom = self.bottom
@@ -901,7 +1161,7 @@ class Player(Entity):
         self.is_grounded = False
 
         if self.velocity_y <= 0.0:
-            self._resolve_landing(previous_bottom, terrain)
+            self._resolve_landing(previous_bottom, world)
 
             # The moment +Y speed reaches zero or becomes negative, the state
             # becomes fall. It remains fall until _resolve_landing() detects a
@@ -916,7 +1176,7 @@ class Player(Entity):
                 self._set_airborne_state('fall')
             return
 
-        self._resolve_ceiling(previous_top, terrain)
+        self._resolve_ceiling(previous_top, world)
 
         # A ceiling impact can set velocity_y to zero. In that case the player
         # begins falling immediately and still stays in fall until landing.
@@ -929,11 +1189,12 @@ class Player(Entity):
     def _resolve_landing(
         self,
         previous_bottom: float,
-        terrain: tuple[TerrainBlock, ...],
+        world: World,
     ) -> None:
         landing_block: TerrainBlock | None = None
 
-        for block in terrain:
+        # Vertical collision only depends on columns under the player's AABB.
+        for block in world.terrain_blocks_overlapping_x(self.left, self.right):
             if not (block.is_solid or block.is_one_way):
                 continue
             if not self._horizontal_overlaps(block):
@@ -957,11 +1218,11 @@ class Player(Entity):
     def _resolve_ceiling(
         self,
         previous_top: float,
-        terrain: tuple[TerrainBlock, ...],
+        world: World,
     ) -> None:
         ceiling_block: TerrainBlock | None = None
 
-        for block in terrain:
+        for block in world.terrain_blocks_overlapping_x(self.left, self.right):
             if not block.is_solid or not self._horizontal_overlaps(block):
                 continue
 

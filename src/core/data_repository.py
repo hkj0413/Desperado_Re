@@ -185,12 +185,19 @@ class DataRepository:
             'movement',
             'respawn',
             'party',
+            'visual_defaults',
         )
         self._require_keys(
             shared_settings['collider'],
             'characters.json.shared_settings.collider',
             'width',
             'height',
+        )
+        self._require_keys(
+            shared_settings['visual_defaults'],
+            'characters.json.shared_settings.visual_defaults',
+            'draw_offset_x',
+            'draw_offset_y',
         )
         self._require_keys(
             shared_settings['combat'],
@@ -228,6 +235,14 @@ class DataRepository:
                 raise JsonDataError(
                     'characters.json.shared_settings.collider.'
                     f'{key} must be greater than zero.'
+                )
+
+        for key in ('draw_offset_x', 'draw_offset_y'):
+            value = shared_settings['visual_defaults'][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise JsonDataError(
+                    'characters.json.shared_settings.visual_defaults.'
+                    f'{key} must be a number.'
                 )
 
         shared_number_keys = (
@@ -317,6 +332,7 @@ class DataRepository:
                 'stats',
                 'ammo',
                 'abilities',
+                'reload',
                 'visual',
             )
             self._require_keys(
@@ -375,6 +391,71 @@ class DataRepository:
                         f'{label}.ammo.{ammo_type} cannot be negative.'
                     )
 
+            reload = record['reload']
+            reload_label = f'{label}.reload'
+            self._require_keys(
+                reload,
+                reload_label,
+                'mode',
+                'action_duration_seconds',
+                'animation_name',
+            )
+            if reload['mode'] not in ('standard', 'recoil_projectile'):
+                raise JsonDataError(
+                    f"{reload_label}.mode must be 'standard' or "
+                    "'recoil_projectile'."
+                )
+            if float(reload['action_duration_seconds']) <= 0.0:
+                raise JsonDataError(
+                    f'{reload_label}.action_duration_seconds must be '
+                    'greater than zero.'
+                )
+            if not str(reload['animation_name']).strip():
+                raise JsonDataError(
+                    f'{reload_label}.animation_name must be non-empty.'
+                )
+
+            if reload['mode'] == 'recoil_projectile':
+                self._require_keys(
+                    reload,
+                    reload_label,
+                    'release_delay_seconds',
+                    'projectile_skill_id',
+                    'recoil_speed_multiplier',
+                    'jump_speed_multiplier',
+                )
+                release_delay = float(reload['release_delay_seconds'])
+                duration = float(reload['action_duration_seconds'])
+                if release_delay < 0.0 or release_delay > duration:
+                    raise JsonDataError(
+                        f'{reload_label}.release_delay_seconds must be '
+                        'between zero and action_duration_seconds.'
+                    )
+                if float(reload['recoil_speed_multiplier']) < 0.0:
+                    raise JsonDataError(
+                        f'{reload_label}.recoil_speed_multiplier cannot be '
+                        'negative.'
+                    )
+                if float(reload['jump_speed_multiplier']) <= 0.0:
+                    raise JsonDataError(
+                        f'{reload_label}.jump_speed_multiplier must be '
+                        'greater than zero.'
+                    )
+                projectile_skill_id = reload['projectile_skill_id']
+                if (
+                    not isinstance(projectile_skill_id, str)
+                    or not projectile_skill_id.strip()
+                ):
+                    raise JsonDataError(
+                        f'{reload_label}.projectile_skill_id must be a skill id.'
+                    )
+                self._must_exist(
+                    tables,
+                    'skills',
+                    projectile_skill_id,
+                    f'{reload_label}.projectile_skill_id',
+                )
+
             animations = record['visual']['animations']
             for animation_name in ('idle', 'walk'):
                 if animation_name not in animations:
@@ -404,6 +485,12 @@ class DataRepository:
                 self._validate_optional_visual_offsets(
                     animation,
                     animation_label,
+                )
+
+            if str(reload['animation_name']) not in animations:
+                raise JsonDataError(
+                    f"{reload_label}.animation_name must name an entry in "
+                    'visual.animations.'
                 )
 
             for ability_field in ability_fields:
@@ -446,14 +533,6 @@ class DataRepository:
                     f'{label}.{key} must be a number when provided.'
                 )
 
-        mirror_key = 'mirror_draw_offset_x_when_facing_left'
-        if mirror_key in mapping and not isinstance(
-            mapping[mirror_key],
-            bool,
-        ):
-            raise JsonDataError(
-                f'{label}.{mirror_key} must be true or false when provided.'
-            )
 
     def _validate_skills(
         self,
@@ -523,6 +602,8 @@ class DataRepository:
         self,
         tables: dict[str, dict[str, Any]],
     ) -> None:
+        """Validate the explicit patrol / detection / pursuit monster schema."""
+
         for record_id, record in tables['enemies']['records'].items():
             label = f'enemies.{record_id}'
             self._require_keys(
@@ -532,6 +613,8 @@ class DataRepository:
                 'archetype',
                 'stats',
                 'ai',
+                'combat',
+                'respawn',
                 'ui',
                 'rewards',
                 'visual',
@@ -541,7 +624,31 @@ class DataRepository:
                 f'{label}.stats',
                 'max_hp',
                 'move_speed',
+                'fortitude',
                 'contact_damage',
+                'contact_cooldown_seconds',
+                'hit_invulnerability_seconds',
+            )
+            self._require_keys(
+                record['ai'],
+                f'{label}.ai',
+                'temperament',
+                'patrol',
+                'detection_range_tiles',
+                'pursuit',
+            )
+            self._require_keys(
+                record['combat'],
+                f'{label}.combat',
+                'attack_range_tiles',
+                'attack_skill_ids',
+                'attack_selection_weights',
+            )
+            self._require_keys(
+                record['respawn'],
+                f'{label}.respawn',
+                'min_seconds',
+                'max_seconds',
             )
             self._require_keys(
                 record['ui'],
@@ -553,10 +660,232 @@ class DataRepository:
                 f'{label}.rewards',
                 'experience_reward',
             )
+
+            if record['ai']['temperament'] not in ('passive', 'aggressive'):
+                raise JsonDataError(
+                    f"{label}.ai.temperament must be 'passive' or 'aggressive'."
+                )
+
+            patrol = record['ai']['patrol']
+            self._require_keys(
+                patrol,
+                f'{label}.ai.patrol',
+                'range_tiles',
+                'decision_interval_min_seconds',
+                'decision_interval_max_seconds',
+                'pause_min_seconds',
+                'pause_max_seconds',
+                'decision_weights',
+            )
+            self._require_keys(
+                patrol['decision_weights'],
+                f'{label}.ai.patrol.decision_weights',
+                'continue',
+                'turn',
+                'pause',
+            )
+
+            detection = record['ai']['detection_range_tiles']
+            self._require_keys(
+                detection,
+                f'{label}.ai.detection_range_tiles',
+                'horizontal',
+                'vertical',
+            )
+
+            pursuit = record['ai']['pursuit']
+            self._require_keys(
+                pursuit,
+                f'{label}.ai.pursuit',
+                'anger_on_hit',
+                'anger_gain_per_second_in_detection',
+                'anger_decay_per_second_outside_range',
+                'pursue_outside_patrol_threshold',
+                'return_to_patrol_threshold',
+                'max_chase_range_tiles',
+            )
+
+            attack_range = record['combat']['attack_range_tiles']
+            self._require_keys(
+                attack_range,
+                f'{label}.combat.attack_range_tiles',
+                'horizontal',
+                'vertical',
+            )
+
+            numeric_values = (
+                ('stats', 'max_hp'),
+                ('stats', 'move_speed'),
+                ('stats', 'fortitude'),
+                ('stats', 'contact_damage'),
+                ('stats', 'contact_cooldown_seconds'),
+                ('stats', 'hit_invulnerability_seconds'),
+                ('ai.patrol', 'range_tiles'),
+                ('ai.patrol', 'decision_interval_min_seconds'),
+                ('ai.patrol', 'decision_interval_max_seconds'),
+                ('ai.patrol', 'pause_min_seconds'),
+                ('ai.patrol', 'pause_max_seconds'),
+                ('ai.detection_range_tiles', 'horizontal'),
+                ('ai.detection_range_tiles', 'vertical'),
+                ('ai.pursuit', 'anger_on_hit'),
+                ('ai.pursuit', 'anger_gain_per_second_in_detection'),
+                ('ai.pursuit', 'anger_decay_per_second_outside_range'),
+                ('ai.pursuit', 'pursue_outside_patrol_threshold'),
+                ('ai.pursuit', 'return_to_patrol_threshold'),
+                ('ai.pursuit', 'max_chase_range_tiles'),
+                ('combat.attack_range_tiles', 'horizontal'),
+                ('combat.attack_range_tiles', 'vertical'),
+                ('respawn', 'min_seconds'),
+                ('respawn', 'max_seconds'),
+            )
+            sections: dict[str, dict[str, Any]] = {
+                'stats': record['stats'],
+                'ai.patrol': patrol,
+                'ai.detection_range_tiles': detection,
+                'ai.pursuit': pursuit,
+                'combat.attack_range_tiles': attack_range,
+                'respawn': record['respawn'],
+            }
+            for section_name, key in numeric_values:
+                value = sections[section_name][key]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise JsonDataError(
+                        f'{label}.{section_name}.{key} must be a number.'
+                    )
+                if float(value) < 0.0:
+                    raise JsonDataError(
+                        f'{label}.{section_name}.{key} cannot be negative.'
+                    )
+
+            if (
+                float(patrol['decision_interval_max_seconds'])
+                < float(patrol['decision_interval_min_seconds'])
+            ):
+                raise JsonDataError(
+                    f'{label}.ai.patrol decision interval max must be >= min.'
+                )
+            if (
+                float(patrol['pause_max_seconds'])
+                < float(patrol['pause_min_seconds'])
+            ):
+                raise JsonDataError(
+                    f'{label}.ai.patrol pause max must be >= min.'
+                )
+            if (
+                float(record['respawn']['max_seconds'])
+                < float(record['respawn']['min_seconds'])
+            ):
+                raise JsonDataError(
+                    f'{label}.respawn.max_seconds must be >= min_seconds.'
+                )
+
+            for key, value in patrol['decision_weights'].items():
+                if key not in ('continue', 'turn', 'pause'):
+                    raise JsonDataError(
+                        f'{label}.ai.patrol.decision_weights.{key} is unsupported.'
+                    )
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise JsonDataError(
+                        f'{label}.ai.patrol.decision_weights.{key} must be a number.'
+                    )
+                if float(value) < 0.0:
+                    raise JsonDataError(
+                        f'{label}.ai.patrol.decision_weights.{key} cannot be negative.'
+                    )
+
             if int(record['rewards']['experience_reward']) < 0:
                 raise JsonDataError(
                     f'{label}.rewards.experience_reward cannot be negative.'
                 )
+
+            attack_ids = record['combat']['attack_skill_ids']
+            if not isinstance(attack_ids, list):
+                raise JsonDataError(
+                    f'{label}.combat.attack_skill_ids must be a list.'
+                )
+
+            attack_id_set: set[str] = set()
+            for skill_id in attack_ids:
+                if not isinstance(skill_id, str) or not skill_id.strip():
+                    raise JsonDataError(
+                        f'{label}.combat.attack_skill_ids contains an invalid skill id.'
+                    )
+                self._must_exist(
+                    tables,
+                    'skills',
+                    skill_id,
+                    f'{label}.combat.attack_skill_ids',
+                )
+                attack_id_set.add(skill_id)
+
+            weights = record['combat']['attack_selection_weights']
+            if not isinstance(weights, dict):
+                raise JsonDataError(
+                    f'{label}.combat.attack_selection_weights must be an object.'
+                )
+
+            for skill_id, weight in weights.items():
+                if skill_id not in attack_id_set:
+                    raise JsonDataError(
+                        f'{label}.combat.attack_selection_weights refers to '
+                        f'non-equipped skill: {skill_id}'
+                    )
+                if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                    raise JsonDataError(
+                        f'{label}.combat.attack_selection_weights.{skill_id} '
+                        'must be a number.'
+                    )
+                if float(weight) < 0.0:
+                    raise JsonDataError(
+                        f'{label}.combat.attack_selection_weights.{skill_id} '
+                        'cannot be negative.'
+                    )
+
+            visual = record['visual']
+            self._require_keys(
+                visual,
+                f'{label}.visual',
+                'width',
+                'height',
+                'placeholder_color',
+            )
+            for key in ('width', 'height'):
+                if int(visual[key]) <= 0:
+                    raise JsonDataError(
+                        f'{label}.visual.{key} must be greater than zero.'
+                    )
+
+            # Animated enemy art is optional while assets are being prepared.
+            if 'animations' in visual:
+                self._require_keys(
+                    visual,
+                    f'{label}.visual',
+                    'directory',
+                    'draw_width',
+                    'draw_height',
+                )
+                if not isinstance(visual['animations'], dict):
+                    raise JsonDataError(
+                        f'{label}.visual.animations must be an object.'
+                    )
+                for animation_name, animation in visual['animations'].items():
+                    animation_label = (
+                        f'{label}.visual.animations.{animation_name}'
+                    )
+                    self._require_keys(
+                        animation,
+                        animation_label,
+                        'file_stem',
+                        'fps',
+                    )
+                    if not str(animation['file_stem']).strip():
+                        raise JsonDataError(
+                            f'{animation_label}.file_stem must be non-empty.'
+                        )
+                    if float(animation['fps']) <= 0.0:
+                        raise JsonDataError(
+                            f'{animation_label}.fps must be greater than zero.'
+                        )
 
     def _validate_tiles(
         self,

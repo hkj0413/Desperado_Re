@@ -66,6 +66,53 @@
       "action_state": "attack",
       "action_duration_seconds": 0.28,
       "animation_name": "attack"
+    },
+    "r93_reload_projectile": {
+      "display_name": "R93 반동 장전탄",
+      "slot": "reload",
+      "behavior_type": "projectile",
+      "cooldown_seconds": 0.0,
+      "action_state": "skill",
+      "action_duration_seconds": 0.0,
+      "projectile": {
+        "damage": 0,
+        "speed": 2000.0,
+        "lifetime_seconds": 0.16,
+        "pierce_count": 0,
+        "width": 33,
+        "height": 52,
+        "stun_seconds": 0.5,
+        "placeholder_color": [
+          176,
+          220,
+          255
+        ]
+      }
+    },
+    "stone_golem_rock_throw": {
+      "display_name": "스톤 골렘 바위 투척",
+      "slot": "enemy_attack",
+      "behavior_type": "projectile",
+      "cooldown_seconds": 1.6,
+      "action_state": "attack",
+      "action_duration_seconds": 0.45,
+      "projectile": {
+        "damage": 34,
+        "speed": 900.0,
+        "lifetime_seconds": 0.8,
+        "pierce_count": 0,
+        "width": 48,
+        "height": 48,
+        "draw_width": 48,
+        "draw_height": 48,
+        "image_path": "assets/Monster/StoneGolem/Rock_StoneGolem (1).png",
+        "source_facing": "left",
+        "placeholder_color": [
+          151,
+          118,
+          82
+        ]
+      }
     }
   }
 }

@@ -7,14 +7,45 @@
       "stats": {
         "max_hp": 80,
         "move_speed": 90.0,
-        "contact_damage": 12,
+        "contact_damage": 0,
         "contact_cooldown_seconds": 1.0,
-        "hit_invulnerability_seconds": 0.12
+        "hit_invulnerability_seconds": 0.12,
+        "fortitude": 0.0
       },
       "ai": {
-        "behavior_type": "chase",
-        "detect_range": 350.0,
-        "attack_range": 42.0
+        "temperament": "passive",
+        "patrol": {
+          "range_tiles": 10.0,
+          "decision_interval_min_seconds": 0.8,
+          "decision_interval_max_seconds": 2.0,
+          "pause_min_seconds": 0.35,
+          "pause_max_seconds": 0.9,
+          "decision_weights": {
+            "continue": 4.0,
+            "turn": 2.0,
+            "pause": 1.5
+          }
+        },
+        "detection_range_tiles": {
+          "horizontal": 8.0,
+          "vertical": 3.0
+        },
+        "pursuit": {
+          "anger_on_hit": 35.0,
+          "anger_gain_per_second_in_detection": 0.0,
+          "anger_decay_per_second_outside_range": 13.0,
+          "pursue_outside_patrol_threshold": 65.0,
+          "return_to_patrol_threshold": 25.0,
+          "max_chase_range_tiles": 20.0
+        }
+      },
+      "combat": {
+        "attack_range_tiles": {
+          "horizontal": 0.0,
+          "vertical": 0.0
+        },
+        "attack_skill_ids": [],
+        "attack_selection_weights": {}
       },
       "ui": {
         "hp_show_distance": 420.0,
@@ -25,7 +56,27 @@
         "experience_reward": 10
       },
       "visual": {
-        "sprite_key": "enemy_spore",
+        "directory": "assets/Monster/Spore",
+        "draw_width": 54,
+        "draw_height": 54,
+        "animations": {
+          "idle": {
+            "file_stem": "Idle_Spore",
+            "fps": 8.0
+          },
+          "walk": {
+            "file_stem": "Walk_Spore",
+            "fps": 10.0
+          },
+          "hit": {
+            "file_stem": "Hit_Spore",
+            "fps": 8.0
+          },
+          "die": {
+            "file_stem": "Die_Spore",
+            "fps": 8.0
+          }
+        },
         "placeholder_color": [
           228,
           88,
@@ -33,6 +84,10 @@
         ],
         "width": 54,
         "height": 54
+      },
+      "respawn": {
+        "min_seconds": 8.0,
+        "max_seconds": 10.0
       }
     },
     "stone_golem": {
@@ -43,12 +98,47 @@
         "move_speed": 68.0,
         "contact_damage": 34,
         "contact_cooldown_seconds": 1.2,
-        "hit_invulnerability_seconds": 0.18
+        "hit_invulnerability_seconds": 0.18,
+        "fortitude": 100.0
       },
       "ai": {
-        "behavior_type": "boss_state_machine",
-        "detect_range": 620.0,
-        "attack_range": 95.0
+        "temperament": "aggressive",
+        "patrol": {
+          "range_tiles": 8.0,
+          "decision_interval_min_seconds": 0.9,
+          "decision_interval_max_seconds": 2.3,
+          "pause_min_seconds": 0.3,
+          "pause_max_seconds": 0.8,
+          "decision_weights": {
+            "continue": 3.5,
+            "turn": 2.0,
+            "pause": 1.0
+          }
+        },
+        "detection_range_tiles": {
+          "horizontal": 16.0,
+          "vertical": 4.0
+        },
+        "pursuit": {
+          "anger_on_hit": 30.0,
+          "anger_gain_per_second_in_detection": 28.0,
+          "anger_decay_per_second_outside_range": 14.0,
+          "pursue_outside_patrol_threshold": 55.0,
+          "return_to_patrol_threshold": 20.0,
+          "max_chase_range_tiles": 24.0
+        }
+      },
+      "combat": {
+        "attack_range_tiles": {
+          "horizontal": 12.0,
+          "vertical": 3.0
+        },
+        "attack_skill_ids": [
+          "stone_golem_rock_throw"
+        ],
+        "attack_selection_weights": {
+          "stone_golem_rock_throw": 1.0
+        }
       },
       "ui": {
         "hp_show_distance": 620.0,
@@ -59,7 +149,31 @@
         "experience_reward": 100
       },
       "visual": {
-        "sprite_key": "enemy_stone_golem",
+        "directory": "assets/Monster/StoneGolem",
+        "draw_width": 120,
+        "draw_height": 120,
+        "animations": {
+          "idle": {
+            "file_stem": "Idle_StoneGolem",
+            "fps": 6.0
+          },
+          "walk": {
+            "file_stem": "Walk_StoneGolem",
+            "fps": 8.0
+          },
+          "attack": {
+            "file_stem": "Attack_StoneGolem",
+            "fps": 8.0
+          },
+          "hit": {
+            "file_stem": "Hit_StoneGolem",
+            "fps": 8.0
+          },
+          "die": {
+            "file_stem": "Die_StoneGolem",
+            "fps": 8.0
+          }
+        },
         "placeholder_color": [
           166,
           132,
@@ -67,6 +181,10 @@
         ],
         "width": 120,
         "height": 120
+      },
+      "respawn": {
+        "min_seconds": 8.0,
+        "max_seconds": 10.0
       }
     }
   }

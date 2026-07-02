@@ -103,7 +103,7 @@ class Hud:
         )
 
         ammo = ', '.join(
-            f'{ammo_type} {amount}'
+            f'{ammo_type} {amount}/{player.party.active_runtime.max_ammo.get(ammo_type, amount)}'
             for ammo_type, amount in player.ammo.items()
         ) or '없음'
         screen.blit(
@@ -150,8 +150,8 @@ class Hud:
         )
 
         controls_line_1 = (
-            '←/→ 이동   Space 점프   LShift 대시   A 기본 공격   '
-            'S/D 스킬   X 고유 스킬   F 궁극기'
+            '←/→ 이동   ↑ 점프   Space 대시   R 장전   A 기본 공격   '
+            'S/D 스킬   X 고유 스킬   C 궁극기'
         )
         controls_line_2 = (
             'W 선택 아이템 사용   Q/E 핫바 이동   Z 캐릭터 교체   '
@@ -190,7 +190,7 @@ class Hud:
             ('S', 'skill_s'),
             ('D', 'skill_d'),
             ('X', 'main_unique'),
-            ('F', 'main_ultimate'),
+            ('C', 'main_ultimate'),
         ):
             skill_id = player.ability_id_for(binding)
             if skill_id is None:
@@ -219,6 +219,7 @@ class Hud:
             'walk': '이동',
             'attack': '공격 중',
             'skill': '스킬 사용 중',
+            'reload': '장전 중',
             'dash': '대시 중',
             'jump': '점프',
             'fall': '추락',
