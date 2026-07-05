@@ -134,6 +134,7 @@ class DataRepository:
             'window',
             'runtime',
             'party',
+            'enemy_shared',
         )
         self._require_keys(
             config['window'],
@@ -154,6 +155,153 @@ class DataRepository:
             'game_config.json.party',
             'max_selectable_characters',
         )
+        self._require_keys(
+            config['enemy_shared'],
+            'game_config.json.enemy_shared',
+            'hp_show_distance',
+            'contact_cooldown_seconds',
+            'hit_invulnerability_seconds',
+            'near_ai_horizontal_range',
+            'far_ai_interval_seconds',
+            'patrol',
+            'attack_charge',
+        )
+        enemy_shared_patrol = config['enemy_shared']['patrol']
+        self._require_keys(
+            enemy_shared_patrol,
+            'game_config.json.enemy_shared.patrol',
+            'logic_tick_seconds',
+            'wander_pressure_per_tick',
+            'wander_pressure_cap',
+            'reverse_probability_after_idle',
+            'idle_probability_steps',
+        )
+        enemy_shared_attack_charge = config['enemy_shared']['attack_charge']
+        self._require_keys(
+            enemy_shared_attack_charge,
+            'game_config.json.enemy_shared.attack_charge',
+            'logic_tick_seconds',
+            'charge_per_tick',
+            'charge_required',
+        )
+
+        for key in (
+            'hp_show_distance',
+            'contact_cooldown_seconds',
+            'hit_invulnerability_seconds',
+            'near_ai_horizontal_range',
+            'far_ai_interval_seconds',
+        ):
+            value = config['enemy_shared'][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise JsonDataError(
+                    f'game_config.json.enemy_shared.{key} must be a number.'
+                )
+            if float(value) < 0.0:
+                raise JsonDataError(
+                    f'game_config.json.enemy_shared.{key} cannot be negative.'
+                )
+
+        far_ai_interval = config['enemy_shared']['far_ai_interval_seconds']
+        if float(far_ai_interval) <= 0.0:
+            raise JsonDataError(
+                'game_config.json.enemy_shared.far_ai_interval_seconds '
+                'must be greater than zero.'
+            )
+
+        for key in (
+            'logic_tick_seconds',
+            'wander_pressure_per_tick',
+            'wander_pressure_cap',
+        ):
+            value = enemy_shared_patrol[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise JsonDataError(
+                    f'game_config.json.enemy_shared.patrol.{key} must be a number.'
+                )
+            if float(value) <= 0.0:
+                raise JsonDataError(
+                    f'game_config.json.enemy_shared.patrol.{key} must be greater than zero.'
+                )
+
+        for key in (
+            'logic_tick_seconds',
+            'charge_per_tick',
+            'charge_required',
+        ):
+            value = enemy_shared_attack_charge[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise JsonDataError(
+                    'game_config.json.enemy_shared.attack_charge.'
+                    f'{key} must be a number.'
+                )
+            if float(value) <= 0.0:
+                raise JsonDataError(
+                    'game_config.json.enemy_shared.attack_charge.'
+                    f'{key} must be greater than zero.'
+                )
+
+        reverse_probability = enemy_shared_patrol['reverse_probability_after_idle']
+        if (
+            isinstance(reverse_probability, bool)
+            or not isinstance(reverse_probability, (int, float))
+            or not 0.0 <= float(reverse_probability) <= 1.0
+        ):
+            raise JsonDataError(
+                'game_config.json.enemy_shared.patrol.'
+                'reverse_probability_after_idle must be between 0 and 1.'
+            )
+
+        probability_steps = enemy_shared_patrol['idle_probability_steps']
+        if not isinstance(probability_steps, list) or not probability_steps:
+            raise JsonDataError(
+                'game_config.json.enemy_shared.patrol.idle_probability_steps '
+                'must be a non-empty list.'
+            )
+
+        previous_minimum = -1.0
+        for index, step in enumerate(probability_steps):
+            label = (
+                'game_config.json.enemy_shared.patrol.'
+                f'idle_probability_steps[{index}]'
+            )
+            if not isinstance(step, dict):
+                raise JsonDataError(f'{label} must be an object.')
+            self._require_keys(
+                step,
+                label,
+                'minimum_pressure',
+                'idle_probability',
+            )
+            minimum = step['minimum_pressure']
+            probability = step['idle_probability']
+            if (
+                isinstance(minimum, bool)
+                or not isinstance(minimum, (int, float))
+                or float(minimum) <= 0.0
+            ):
+                raise JsonDataError(
+                    f'{label}.minimum_pressure must be a number greater than zero.'
+                )
+            if (
+                isinstance(probability, bool)
+                or not isinstance(probability, (int, float))
+                or not 0.0 <= float(probability) <= 1.0
+            ):
+                raise JsonDataError(
+                    f'{label}.idle_probability must be between 0 and 1.'
+                )
+            if float(minimum) <= previous_minimum:
+                raise JsonDataError(
+                    f'{label}.minimum_pressure must be strictly increasing.'
+                )
+            previous_minimum = float(minimum)
+
+        if previous_minimum > float(enemy_shared_patrol['wander_pressure_cap']):
+            raise JsonDataError(
+                'game_config.json.enemy_shared.patrol idle probability steps '
+                'cannot start above the pressure cap.'
+            )
 
         if int(config['party']['max_selectable_characters']) != 4:
             raise JsonDataError(
@@ -218,6 +366,8 @@ class DataRepository:
             shared_settings['respawn'],
             'characters.json.shared_settings.respawn',
             'wait_seconds',
+            'experience_loss_on_hp_zero_death',
+            'pit_death_depth_below_world_bottom',
         )
         self._require_keys(
             shared_settings['party'],
@@ -254,6 +404,8 @@ class DataRepository:
             ('movement', 'dash_duration_seconds'),
             ('movement', 'dash_cooldown_seconds'),
             ('respawn', 'wait_seconds'),
+            ('respawn', 'experience_loss_on_hp_zero_death'),
+            ('respawn', 'pit_death_depth_below_world_bottom'),
             ('party', 'max_hp'),
             ('party', 'initial_hp'),
         )
@@ -377,6 +529,44 @@ class DataRepository:
                     'must be greater than zero.'
                 )
 
+            combat_rules = record.get('combat_rules', {})
+            bindings = combat_rules.get('stagger_immune_bindings', ())
+            known_binding_names = {
+                'basic',
+                'skill_s',
+                'skill_d',
+                'main_unique',
+                'main_ultimate',
+            }
+            if not isinstance(bindings, list) or any(
+                binding not in known_binding_names for binding in bindings
+            ):
+                raise JsonDataError(
+                    f'{label}.combat_rules.stagger_immune_bindings must be '
+                    'a list of known ability binding names.'
+                )
+
+            allowed_basic_attack_states = combat_rules.get(
+                'basic_attack_allowed_states'
+            )
+            if allowed_basic_attack_states is not None:
+                known_action_states = {
+                    'idle', 'walk', 'jump', 'fall', 'dash', 'hit',
+                    'attack', 'skill', 'reload',
+                }
+                if (
+                    not isinstance(allowed_basic_attack_states, list)
+                    or not allowed_basic_attack_states
+                    or any(
+                        state not in known_action_states
+                        for state in allowed_basic_attack_states
+                    )
+                ):
+                    raise JsonDataError(
+                        f'{label}.combat_rules.basic_attack_allowed_states '
+                        'must be a non-empty list of valid action states.'
+                    )
+
             for ammo_type, amount in record['ammo'].items():
                 if not str(ammo_type).strip():
                     raise JsonDataError(
@@ -413,6 +603,13 @@ class DataRepository:
             if not str(reload['animation_name']).strip():
                 raise JsonDataError(
                     f'{reload_label}.animation_name must be non-empty.'
+                )
+            if 'stagger_immunity' in reload and not isinstance(
+                reload['stagger_immunity'],
+                bool,
+            ):
+                raise JsonDataError(
+                    f'{reload_label}.stagger_immunity must be a boolean.'
                 )
 
             if reload['mode'] == 'recoil_projectile':
@@ -534,6 +731,33 @@ class DataRepository:
                 )
 
 
+    @staticmethod
+    def _validate_optional_visual_draw_sizes(
+        mapping: dict[str, Any],
+        label: str,
+    ) -> None:
+        """Validate optional render-only width/height overrides.
+
+        The enemy collider remains ``visual.width`` / ``visual.height``.
+        These optional settings affect only sprite rendering.
+        """
+
+        for key in ('draw_width', 'draw_height'):
+            if key not in mapping:
+                continue
+
+            value = mapping[key]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or float(value) <= 0.0
+            ):
+                raise JsonDataError(
+                    f'{label}.{key} must be a number greater than zero '
+                    'when provided.'
+                )
+
+
     def _validate_skills(
         self,
         tables: dict[str, dict[str, Any]],
@@ -559,6 +783,14 @@ class DataRepository:
             if record['action_state'] not in ('attack', 'skill'):
                 raise JsonDataError(
                     f"{label}.action_state must be 'attack' or 'skill'."
+                )
+
+            if 'stagger_immunity' in record and not isinstance(
+                record['stagger_immunity'],
+                bool,
+            ):
+                raise JsonDataError(
+                    f'{label}.stagger_immunity must be a boolean when provided.'
                 )
 
             if float(record['action_duration_seconds']) < 0.0:
@@ -626,8 +858,6 @@ class DataRepository:
                 'move_speed',
                 'fortitude',
                 'contact_damage',
-                'contact_cooldown_seconds',
-                'hit_invulnerability_seconds',
             )
             self._require_keys(
                 record['ai'],
@@ -653,7 +883,7 @@ class DataRepository:
             self._require_keys(
                 record['ui'],
                 f'{label}.ui',
-                'hp_show_distance',
+                'hp_bar_offset_y',
             )
             self._require_keys(
                 record['rewards'],
@@ -671,18 +901,8 @@ class DataRepository:
                 patrol,
                 f'{label}.ai.patrol',
                 'range_tiles',
-                'decision_interval_min_seconds',
-                'decision_interval_max_seconds',
                 'pause_min_seconds',
                 'pause_max_seconds',
-                'decision_weights',
-            )
-            self._require_keys(
-                patrol['decision_weights'],
-                f'{label}.ai.patrol.decision_weights',
-                'continue',
-                'turn',
-                'pause',
             )
 
             detection = record['ai']['detection_range_tiles']
@@ -718,11 +938,7 @@ class DataRepository:
                 ('stats', 'move_speed'),
                 ('stats', 'fortitude'),
                 ('stats', 'contact_damage'),
-                ('stats', 'contact_cooldown_seconds'),
-                ('stats', 'hit_invulnerability_seconds'),
                 ('ai.patrol', 'range_tiles'),
-                ('ai.patrol', 'decision_interval_min_seconds'),
-                ('ai.patrol', 'decision_interval_max_seconds'),
                 ('ai.patrol', 'pause_min_seconds'),
                 ('ai.patrol', 'pause_max_seconds'),
                 ('ai.detection_range_tiles', 'horizontal'),
@@ -758,13 +974,6 @@ class DataRepository:
                     )
 
             if (
-                float(patrol['decision_interval_max_seconds'])
-                < float(patrol['decision_interval_min_seconds'])
-            ):
-                raise JsonDataError(
-                    f'{label}.ai.patrol decision interval max must be >= min.'
-                )
-            if (
                 float(patrol['pause_max_seconds'])
                 < float(patrol['pause_min_seconds'])
             ):
@@ -778,20 +987,6 @@ class DataRepository:
                 raise JsonDataError(
                     f'{label}.respawn.max_seconds must be >= min_seconds.'
                 )
-
-            for key, value in patrol['decision_weights'].items():
-                if key not in ('continue', 'turn', 'pause'):
-                    raise JsonDataError(
-                        f'{label}.ai.patrol.decision_weights.{key} is unsupported.'
-                    )
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    raise JsonDataError(
-                        f'{label}.ai.patrol.decision_weights.{key} must be a number.'
-                    )
-                if float(value) < 0.0:
-                    raise JsonDataError(
-                        f'{label}.ai.patrol.decision_weights.{key} cannot be negative.'
-                    )
 
             if int(record['rewards']['experience_reward']) < 0:
                 raise JsonDataError(
@@ -855,6 +1050,15 @@ class DataRepository:
                         f'{label}.visual.{key} must be greater than zero.'
                     )
 
+            self._validate_optional_visual_offsets(
+                visual,
+                f'{label}.visual',
+            )
+            self._validate_optional_visual_draw_sizes(
+                visual,
+                f'{label}.visual',
+            )
+
             # Animated enemy art is optional while assets are being prepared.
             if 'animations' in visual:
                 self._require_keys(
@@ -886,6 +1090,14 @@ class DataRepository:
                         raise JsonDataError(
                             f'{animation_label}.fps must be greater than zero.'
                         )
+                    self._validate_optional_visual_offsets(
+                        animation,
+                        animation_label,
+                    )
+                    self._validate_optional_visual_draw_sizes(
+                        animation,
+                        animation_label,
+                    )
 
     def _validate_tiles(
         self,

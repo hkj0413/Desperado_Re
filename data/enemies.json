@@ -5,30 +5,21 @@
       "display_name": "Spore",
       "archetype": "enemy",
       "stats": {
-        "max_hp": 80,
-        "move_speed": 90.0,
-        "contact_damage": 0,
-        "contact_cooldown_seconds": 1.0,
-        "hit_invulnerability_seconds": 0.12,
+        "max_hp": 10,
+        "move_speed": 150.0,
+        "contact_damage": 1,
         "fortitude": 0.0
       },
       "ai": {
         "temperament": "passive",
         "patrol": {
           "range_tiles": 10.0,
-          "decision_interval_min_seconds": 0.8,
-          "decision_interval_max_seconds": 2.0,
-          "pause_min_seconds": 0.35,
-          "pause_max_seconds": 0.9,
-          "decision_weights": {
-            "continue": 4.0,
-            "turn": 2.0,
-            "pause": 1.5
-          }
+          "pause_min_seconds": 0.5,
+          "pause_max_seconds": 2.0
         },
         "detection_range_tiles": {
-          "horizontal": 8.0,
-          "vertical": 3.0
+          "horizontal": 5.0,
+          "vertical": 1.0
         },
         "pursuit": {
           "anger_on_hit": 35.0,
@@ -48,8 +39,7 @@
         "attack_selection_weights": {}
       },
       "ui": {
-        "hp_show_distance": 420.0,
-        "hp_bar_offset_y": 12
+        "hp_bar_offset_y": 4
       },
       "rewards": {
         "drop_table_id": "spore_basic",
@@ -62,11 +52,11 @@
         "animations": {
           "idle": {
             "file_stem": "Idle_Spore",
-            "fps": 8.0
+            "fps": 4.0
           },
           "walk": {
             "file_stem": "Walk_Spore",
-            "fps": 10.0
+            "fps": 8.0
           },
           "hit": {
             "file_stem": "Hit_Spore",
@@ -83,7 +73,9 @@
           88
         ],
         "width": 54,
-        "height": 54
+        "height": 54,
+        "draw_offset_x": 0.0,
+        "draw_offset_y": -8.0
       },
       "respawn": {
         "min_seconds": 8.0,
@@ -95,25 +87,16 @@
       "archetype": "boss",
       "stats": {
         "max_hp": 900,
-        "move_speed": 68.0,
-        "contact_damage": 34,
-        "contact_cooldown_seconds": 1.2,
-        "hit_invulnerability_seconds": 0.18,
+        "move_speed": 100.0,
+        "contact_damage": 25,
         "fortitude": 100.0
       },
       "ai": {
         "temperament": "aggressive",
         "patrol": {
           "range_tiles": 8.0,
-          "decision_interval_min_seconds": 0.9,
-          "decision_interval_max_seconds": 2.3,
           "pause_min_seconds": 0.3,
-          "pause_max_seconds": 0.8,
-          "decision_weights": {
-            "continue": 3.5,
-            "turn": 2.0,
-            "pause": 1.0
-          }
+          "pause_max_seconds": 0.8
         },
         "detection_range_tiles": {
           "horizontal": 16.0,
@@ -141,8 +124,7 @@
         }
       },
       "ui": {
-        "hp_show_distance": 620.0,
-        "hp_bar_offset_y": 18
+        "hp_bar_offset_y": 110
       },
       "rewards": {
         "drop_table_id": "boss_stone_golem",
@@ -150,28 +132,28 @@
       },
       "visual": {
         "directory": "assets/Monster/StoneGolem",
-        "draw_width": 120,
-        "draw_height": 120,
+        "draw_width": 240,
+        "draw_height": 240,
         "animations": {
           "idle": {
             "file_stem": "Idle_StoneGolem",
-            "fps": 6.0
+            "fps": 4.0
           },
           "walk": {
             "file_stem": "Walk_StoneGolem",
-            "fps": 8.0
+            "fps": 4.0
           },
           "attack": {
             "file_stem": "Attack_StoneGolem",
-            "fps": 8.0
+            "fps": 4.0
           },
           "hit": {
             "file_stem": "Hit_StoneGolem",
-            "fps": 8.0
+            "fps": 12.0
           },
           "die": {
             "file_stem": "Die_StoneGolem",
-            "fps": 8.0
+            "fps": 12.0
           }
         },
         "placeholder_color": [
@@ -179,8 +161,10 @@
           132,
           91
         ],
-        "width": 120,
-        "height": 120
+        "width": 240,
+        "height": 120,
+        "draw_offset_x": 34.0,
+        "draw_offset_y": 58.0
       },
       "respawn": {
         "min_seconds": 8.0,

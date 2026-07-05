@@ -13,6 +13,37 @@ if TYPE_CHECKING:
 class Hud:
     """Screen-space UI. It never moves with the scrolling world."""
 
+    _TEXT_CACHE_LIMIT = 512
+
+    def __init__(self) -> None:
+        # Font rasterization is much more expensive than blitting an existing
+        # surface. Most HUD strings repeat across hundreds of frames, so keep a
+        # small bounded cache keyed by the exact rendered appearance.
+        self._text_cache: dict[
+            tuple[int, str, tuple[int, int, int]],
+            pygame.Surface,
+        ] = {}
+
+    def _render_cached(
+        self,
+        font: pygame.font.Font,
+        text: str,
+        color: tuple[int, int, int],
+    ) -> pygame.Surface:
+        key = (id(font), text, color)
+        cached = self._text_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if len(self._text_cache) >= self._TEXT_CACHE_LIMIT:
+            # A bounded cache avoids accumulating unique notices forever while
+            # retaining the common steady-state HUD values.
+            self._text_cache.clear()
+
+        rendered = font.render(text, True, color)
+        self._text_cache[key] = rendered
+        return rendered
+
     def draw(
         self,
         screen: pygame.Surface,
@@ -24,69 +55,77 @@ class Hud:
         title_font = app.fonts.get(24, bold=True)
         body_font = app.fonts.get(18)
 
-        x, y, width, height = 32, 30, 270, 20
-        ratio = player.hp / player.max_hp if player.max_hp > 0 else 0.0
+        # Shared player HP: full maximum width stays visible in bright green,
+        # while missing HP is covered from the right by a darker green so the
+        # player can still read the maximum capacity at a glance.
+        x, y, width, height = 32, 30, 160, 34
+        hp_text = f'{player.hp}/{player.max_hp}'
+        hp_ratio = 0.0
+        if player.max_hp > 0:
+            hp_ratio = max(0.0, min(1.0, player.hp / player.max_hp))
 
         pygame.draw.rect(
             screen,
-            (32, 32, 38),
+            (42, 126, 62),
             (x, y, width, height),
-            border_radius=5,
+            border_radius=3,
         )
+
+        missing_width = int(round(width * (1.0 - hp_ratio)))
+        if missing_width > 0:
+            pygame.draw.rect(
+                screen,
+                (24, 86, 40),
+                (x + width - missing_width, y, missing_width, height),
+                border_top_right_radius=3,
+                border_bottom_right_radius=3,
+            )
+
         pygame.draw.rect(
             screen,
-            (70, 190, 255),
-            (x, y, int(width * ratio), height),
-            border_radius=5,
-        )
-        pygame.draw.rect(
-            screen,
-            (230, 235, 245),
+            (18, 66, 30),
             (x, y, width, height),
-            width=1,
-            border_radius=5,
+            width=2,
+            border_radius=3,
         )
+        hp_surface = self._render_cached(title_font, hp_text, (244, 255, 244))
+        hp_rect = hp_surface.get_rect(
+            center=(x + width / 2, y + height / 2)
+        )
+        screen.blit(hp_surface, hp_rect)
 
         active_slot = '메인' if player.party.active_slot == 'main' else '서브'
         main_name = player.party.definition_for('main')['display_name']
         sub_name = player.party.definition_for('sub')['display_name']
 
         screen.blit(
-            title_font.render(
-                f'공유 HP {player.hp}/{player.max_hp}',
-                True,
-                (240, 245, 250),
-            ),
-            (32, 56),
-        )
-        screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'공유 경험치  {player.experience}',
-                True,
                 (164, 223, 255),
             ),
             (32, 82),
         )
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'공유 레벨 {player.party.shared_level}   강화 {player.party.shared_enhancement_level}',
-                True,
                 (164, 223, 255),
             ),
             (32, 108),
         )
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'현재: {player.display_name} ({active_slot})',
-                True,
                 (255, 235, 169),
             ),
             (32, 134),
         )
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'메인: {main_name}   서브: {sub_name}',
-                True,
                 (218, 223, 234),
             ),
             (32, 160),
@@ -94,9 +133,9 @@ class Hud:
 
         ability_text = self._ability_text(app, player)
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 ability_text,
-                True,
                 (218, 223, 234),
             ),
             (32, 186),
@@ -107,9 +146,9 @@ class Hud:
             for ammo_type, amount in player.ammo.items()
         ) or '없음'
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'탄약  {ammo}  ← 캐릭터별',
-                True,
                 (218, 223, 234),
             ),
             (32, 212),
@@ -117,18 +156,18 @@ class Hud:
 
         hotbar = self._hotbar_text(player)
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 f'공용 핫바  {hotbar}',
-                True,
                 (218, 223, 234),
             ),
             (32, 238),
         )
         screen.blit(
-            body_font.render(
-                f'상태: {self._state_label(player.action_state)}  '
+            self._render_cached(
+                body_font,
+                f'상태: {self._state_label(player.display_state)}  '
                 f'공격속도 x{player.attack_speed_multiplier:.2f}',
-                True,
                 (166, 191, 222),
             ),
             (32, 264),
@@ -150,34 +189,34 @@ class Hud:
         )
 
         controls_line_1 = (
-            '←/→ 이동   ↑ 점프   Space 대시   R 장전   A 기본 공격   '
-            'S/D 스킬   X 고유 스킬   C 궁극기'
+            '←/→ 이동   Space 점프   Left Shift 대시   ↑ 미사용   '
+            'R 장전   A 기본 공격   S/D 스킬   X 고유 스킬   C 궁극기'
         )
         controls_line_2 = (
             'W 선택 아이템 사용   Q/E 핫바 이동   Z 캐릭터 교체   '
             'H 테두리 디버그   F5 데이터 리로드   ESC 메뉴'
         )
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 controls_line_1,
-                True,
                 (190, 198, 212),
             ),
             (32, 844),
         )
         screen.blit(
-            body_font.render(
+            self._render_cached(
+                body_font,
                 controls_line_2,
-                True,
                 (190, 198, 212),
             ),
             (32, 868),
         )
 
         if notice:
-            text = title_font.render(
+            text = self._render_cached(
+                title_font,
                 notice,
-                True,
                 (255, 234, 158),
             )
             screen.blit(text, (32, 292))

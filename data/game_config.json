@@ -16,5 +16,45 @@
   },
   "party": {
     "max_selectable_characters": 4
+  },
+  "enemy_shared": {
+    "hp_show_distance": 800.0,
+    "contact_cooldown_seconds": 1.0,
+    "hit_invulnerability_seconds": 0.2,
+    "near_ai_horizontal_range": 1600.0,
+    "far_ai_interval_seconds": 1.0,
+    "patrol": {
+      "logic_tick_seconds": 0.25,
+      "wander_pressure_per_tick": 1.0,
+      "wander_pressure_cap": 20.0,
+      "idle_probability_steps": [
+        {
+          "minimum_pressure": 1.0,
+          "idle_probability": 0.05
+        },
+        {
+          "minimum_pressure": 6.0,
+          "idle_probability": 0.2
+        },
+        {
+          "minimum_pressure": 12.0,
+          "idle_probability": 0.4
+        },
+        {
+          "minimum_pressure": 16.0,
+          "idle_probability": 0.8
+        },
+        {
+          "minimum_pressure": 20.0,
+          "idle_probability": 0.9
+        }
+      ],
+      "reverse_probability_after_idle": 0.5
+    },
+    "attack_charge": {
+      "logic_tick_seconds": 0.25,
+      "charge_per_tick": 1.0,
+      "charge_required": 4.0
+    }
   }
 }

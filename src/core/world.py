@@ -7,6 +7,13 @@ import pygame
 
 from src.core.camera import Camera, WorldBounds
 from src.core.collision import AABB, CollisionSystem
+from src.core.navigation import (
+    NavigationLane,
+    StaticNavigationMap,
+    build_static_navigation_map,
+    make_profile,
+    profile_key,
+)
 
 if TYPE_CHECKING:
     from src.app import GameApp
@@ -50,6 +57,18 @@ class World:
         self._terrain_tile_size = 40.0
         self._terrain_grid_origin_x = float(bounds.left)
         self._terrain_columns: dict[int, list[TerrainBlock]] = {}
+        # Incremented whenever terrain topology changes. Navigation caches can
+        # safely survive ordinary movement, but must be discarded if the stage
+        # adds, removes, or rebuilds terrain.
+        self._terrain_navigation_revision = 0
+
+        # Static terrain is converted into profile-specific horizontal lanes.
+        # They are built once after stage setup and invalidated only when terrain
+        # topology actually changes.
+        self._navigation_maps: dict[tuple[int, int], StaticNavigationMap] = {}
+        self._player_navigation_lanes: dict[tuple[int, int], NavigationLane | None] = {}
+        self._player_navigation_marker: tuple[float, float, bool, int] | None = None
+        self._primary_player: Entity | None = None
 
         # Draw layers never depend on entity position, so sorting every render
         # frame is unnecessary. Terrain is stored separately because it is
@@ -65,6 +84,11 @@ class World:
             str,
             dict[tuple[int, int], list[Entity]],
         ] = {}
+        # A collider is immutable for the rest of a collision pass because the
+        # index is rebuilt only after every entity has finished moving. Keeping
+        # it here prevents every projectile-candidate comparison from creating
+        # another short-lived AABB object.
+        self._collision_aabbs: dict[Entity, AABB] = {}
         self._collision_activity_half_width = (
             self._DEFAULT_COLLISION_ACTIVITY_HALF_WIDTH
         )
@@ -83,6 +107,17 @@ class World:
     @property
     def terrain_tile_size(self) -> float:
         return self._terrain_tile_size
+
+    @property
+    def terrain_navigation_revision(self) -> int:
+        """Monotonic revision for terrain-aware movement caches."""
+
+        return self._terrain_navigation_revision
+
+    def terrain_column_for_x(self, x: float) -> int:
+        """Return the stage grid column containing a world x coordinate."""
+
+        return self._terrain_column_for_x(x)
 
     def configure_collision_activity_window(
         self,
@@ -132,6 +167,8 @@ class World:
         self._terrain_tile_size = value
         self._terrain_grid_origin_x = float(self.bounds.left)
         self._terrain_columns.clear()
+        self._terrain_navigation_revision += 1
+        self._invalidate_static_navigation()
 
         for entity in self._groups.get('terrain', []):
             self._index_terrain_entity(entity)
@@ -142,6 +179,19 @@ class World:
     def remove(self, entity: Entity) -> None:
         entity.alive = False
         self._pending_remove.add(entity)
+
+    def remove_all_in_group(self, group: str) -> None:
+        """Queue removal for every current entity in one collision group.
+
+        Player death uses this only for player_projectile so already-spawned
+        attack effects are cancelled together with pending skill requests.
+        """
+
+        for entity in tuple(self._groups.get(group, ())):
+            self.remove(entity)
+        for entity in tuple(self._pending_add):
+            if entity.collision_group == group:
+                self.remove(entity)
 
     def commit(self) -> None:
         changed = False
@@ -182,6 +232,8 @@ class World:
             return
 
         self._groups.setdefault(group, []).append(entity)
+        if group == 'player' and self._primary_player is None:
+            self._primary_player = entity
         if group == 'terrain':
             self._index_terrain_entity(entity)
 
@@ -205,6 +257,18 @@ class World:
             if not group_entities:
                 self._groups.pop(group, None)
 
+        if group == 'player' and entity is self._primary_player:
+            self._primary_player = next(
+                (
+                    candidate
+                    for candidate in self._groups.get('player', ())
+                    if candidate.alive
+                ),
+                None,
+            )
+            self._player_navigation_marker = None
+            self._player_navigation_lanes.clear()
+
         if group == 'terrain':
             self._unindex_terrain_entity(entity)
 
@@ -223,6 +287,8 @@ class World:
     def _index_terrain_entity(self, entity: Entity) -> None:
         column = self._terrain_column_for_entity(entity)
         self._terrain_columns.setdefault(column, []).append(entity)
+        self._terrain_navigation_revision += 1
+        self._invalidate_static_navigation()
 
     def _unindex_terrain_entity(self, entity: Entity) -> None:
         column = self._terrain_column_for_entity(entity)
@@ -237,6 +303,8 @@ class World:
 
         if not blocks:
             self._terrain_columns.pop(column, None)
+        self._terrain_navigation_revision += 1
+        self._invalidate_static_navigation()
 
     def terrain_blocks_at_x(self, x: float) -> Iterable[TerrainBlock]:
         """Return only terrain in the tile column containing ``x``.
@@ -274,10 +342,140 @@ class World:
             yield from self._terrain_columns.get(column, ())
 
     # ------------------------------------------------------------------
+    # Static navigation lanes
+
+    @property
+    def primary_player(self) -> Entity | None:
+        """Return the cached live player without scanning its group per enemy."""
+
+        player = self._primary_player
+        if player is not None and player.alive:
+            return player
+
+        player = self.first_with_group('player')
+        self._primary_player = player
+        return player
+
+    def _invalidate_static_navigation(self) -> None:
+        self._navigation_maps.clear()
+        self._player_navigation_lanes.clear()
+        self._player_navigation_marker = None
+
+    def prepare_navigation_profile(
+        self,
+        width: float,
+        height: float,
+    ) -> StaticNavigationMap:
+        """Return a stage-static navigation map for one collider size."""
+
+        key = profile_key(width, height)
+        cached = self._navigation_maps.get(key)
+        if (
+            cached is not None
+            and cached.terrain_revision == self._terrain_navigation_revision
+        ):
+            return cached
+
+        navigation_map = build_static_navigation_map(
+            self._terrain_columns,
+            tile_size=self._terrain_tile_size,
+            origin_x=self._terrain_grid_origin_x,
+            terrain_revision=self._terrain_navigation_revision,
+            profile=make_profile(width, height),
+            epsilon=self._TERRAIN_BOUNDARY_EPSILON,
+        )
+        self._navigation_maps[key] = navigation_map
+        self._player_navigation_marker = None
+        self._player_navigation_lanes.pop(key, None)
+        return navigation_map
+
+    def navigation_lane_for_body(
+        self,
+        *,
+        x: float,
+        body_bottom: float,
+        width: float,
+        height: float,
+        allow_spawn_tolerance: bool = False,
+    ) -> NavigationLane | None:
+        """Resolve a prebuilt lane; this never scans terrain at runtime."""
+
+        navigation_map = self.prepare_navigation_profile(width, height)
+        tolerance = self._terrain_tile_size * (0.5 if allow_spawn_tolerance else 0.15)
+        if allow_spawn_tolerance:
+            return navigation_map.nearest_lane_at_spawn(
+                x,
+                body_bottom,
+                vertical_tolerance=tolerance,
+                epsilon=self._TERRAIN_BOUNDARY_EPSILON,
+            )
+        return navigation_map.lane_at(
+            x,
+            body_bottom,
+            vertical_tolerance=tolerance,
+            epsilon=self._TERRAIN_BOUNDARY_EPSILON,
+        )
+
+    def _refresh_player_navigation_lanes(self) -> None:
+        player = self.primary_player
+        if player is None:
+            marker = (0.0, 0.0, False, self._terrain_navigation_revision)
+            if marker != self._player_navigation_marker:
+                self._player_navigation_lanes = {
+                    key: None for key in self._navigation_maps
+                }
+                self._player_navigation_marker = marker
+            return
+
+        # An airborne player has no horizontal walking lane. The last grounded
+        # lane is deliberately not reused: enemies without jump/fall movement
+        # must not chase a target in mid-air.
+        grounded = bool(getattr(player, 'is_grounded', True))
+        body_bottom = float(getattr(player, 'bottom', player.y - player.height * 0.5))
+        marker = (
+            float(player.x),
+            body_bottom,
+            grounded,
+            self._terrain_navigation_revision,
+        )
+        if marker == self._player_navigation_marker:
+            return
+
+        refreshed: dict[tuple[int, int], NavigationLane | None] = {}
+        if grounded:
+            for key, navigation_map in self._navigation_maps.items():
+                refreshed[key] = navigation_map.lane_at(
+                    player.x,
+                    body_bottom,
+                    vertical_tolerance=self._terrain_tile_size * 0.15,
+                    epsilon=self._TERRAIN_BOUNDARY_EPSILON,
+                )
+        else:
+            refreshed = {key: None for key in self._navigation_maps}
+
+        self._player_navigation_lanes = refreshed
+        self._player_navigation_marker = marker
+
+    def player_navigation_lane_id_for_profile(
+        self,
+        width: float,
+        height: float,
+    ) -> int | None:
+        """Return the player's current lane for an enemy collider profile."""
+
+        key = profile_key(width, height)
+        self.prepare_navigation_profile(width, height)
+        self._refresh_player_navigation_lanes()
+        lane = self._player_navigation_lanes.get(key)
+        return None if lane is None else lane.lane_id
+
+    # ------------------------------------------------------------------
     # Collision broad phase
 
     def _refresh_collision_activity_center(self) -> None:
-        player = self.first_with_group('player')
+        # ``primary_player`` is maintained on add/remove, so this avoids a
+        # repeated group scan whenever the collision grid is rebuilt.
+        player = self.primary_player
         if player is None:
             self._collision_activity_center = None
             return
@@ -323,9 +521,12 @@ class World:
         """Build a frame-local spatial hash only for registered rule groups."""
 
         self._collision_cells.clear()
+        self._collision_aabbs.clear()
         self._refresh_collision_activity_center()
 
-        for group in set(groups):
+        # CollisionSystem already supplies unique group names. Do not build a
+        # second temporary set here every frame.
+        for group in groups:
             cells: dict[tuple[int, int], list[Entity]] = {}
             for entity in self._groups.get(group, ()):
                 if not entity.alive or not self.is_collision_active(entity):
@@ -335,12 +536,26 @@ class World:
                 if collider is None:
                     continue
 
+                self._collision_aabbs[entity] = collider
                 left, right, bottom, top = self._collision_cell_range(collider)
                 for column in range(left, right + 1):
                     for row in range(bottom, top + 1):
                         cells.setdefault((column, row), []).append(entity)
 
             self._collision_cells[group] = cells
+
+    def collision_aabb(self, entity: Entity) -> AABB | None:
+        """Return this pass's collider without allocating a second AABB.
+
+        CollisionSystem calls this after :meth:`rebuild_collision_index`, when
+        movement is already complete. The fallback keeps the method safe for
+        focused unit tests that call it outside that normal frame sequence.
+        """
+
+        cached = self._collision_aabbs.get(entity)
+        if cached is not None:
+            return cached
+        return entity.get_aabb()
 
     def collision_candidates(
         self,
@@ -354,8 +569,18 @@ class World:
             yield from self._groups.get(group, ())
             return
 
-        seen: set[int] = set()
         left, right, bottom, top = self._collision_cell_range(collider)
+
+        # Most bullets and small actors fit entirely in one grid cell. In that
+        # case every list entry is inherently unique, so a per-query ``set`` is
+        # needless allocation work during rapid fire.
+        if left == right and bottom == top:
+            yield from cells.get((left, bottom), ())
+            return
+
+        # Larger colliders may occupy several cells. Preserve the original
+        # exactly-once semantics only for this less common path.
+        seen: set[int] = set()
         for column in range(left, right + 1):
             for row in range(bottom, top + 1):
                 for entity in cells.get((column, row), ()):
@@ -371,10 +596,20 @@ class World:
     def update(self, delta_seconds: float, app: GameApp) -> None:
         self.commit()
 
-        # Only dynamic actors update. This skips static terrain, items, and
-        # portals without changing any collision or rendering behavior.
-        for entity in tuple(self._updatable_entities):
-            if entity.alive:
+        # The player is advanced first. Static navigation then resolves the
+        # player's lane once for every distinct enemy collider profile; every
+        # enemy merely reads that cached lane id during its AI step.
+        for entity in self._updatable_entities:
+            if entity.alive and entity.collision_group == 'player':
+                entity.update(delta_seconds, self, app)
+
+        self._refresh_player_navigation_lanes()
+
+        # Static terrain, items, and portals never enter this list. Pending
+        # add/remove operations are committed after the loop, so iterating the
+        # stable list directly avoids allocating a tuple every frame.
+        for entity in self._updatable_entities:
+            if entity.alive and entity.collision_group != 'player':
                 entity.update(delta_seconds, self, app)
 
         self.commit()
@@ -436,12 +671,30 @@ class World:
         # existing stage layers place terrain below portals/items/projectiles/
         # actors, and the same layer ordering is retained here.
         for layer in self._draw_layers:
+            terrain_blits: list[tuple[pygame.Surface, tuple[int, int]]] = []
             for entity in visible_terrain.get(layer, ()):
-                entity.draw(screen, self, app, camera)
+                if bool(getattr(entity, 'is_visual_hidden', False)):
+                    continue
+
+                # TerrainBlock supplies an already-cached source surface and
+                # destination pair. One native blits call reduces Python-to-SDL
+                # draw-call overhead when a camera sees many tile blocks.
+                draw_command = getattr(entity, 'draw_command', None)
+                if callable(draw_command):
+                    terrain_blits.append(draw_command(app, camera))
+                else:
+                    # Preserve World compatibility with alternate terrain
+                    # entities that expose only the standard Entity.draw API.
+                    entity.draw(screen, self, app, camera)
                 visible_entities.append(entity)
 
+            if terrain_blits:
+                screen.blits(terrain_blits, False)
+
             for entity in self._draw_non_terrain_by_layer.get(layer, ()):
-                if not entity.alive:
+                if not entity.alive or bool(
+                    getattr(entity, 'is_visual_hidden', False)
+                ):
                     continue
                 entity.draw(screen, self, app, camera)
                 visible_entities.append(entity)
@@ -475,9 +728,13 @@ class World:
         ):
             return
 
+        # Red collision AABB: horizontally centered at entity.x, vertically
+        # defined from its physical bottom upward. The rectangle is equivalent
+        # to using entity.y, but this makes its convention match green/orange.
+        center_y = entity.bottom + entity.height * 0.5
         rect = camera.rect_from_world_center(
             entity.x,
-            entity.y,
+            center_y,
             entity.width,
             entity.height,
         )

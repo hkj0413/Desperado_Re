@@ -85,7 +85,7 @@ class CollisionSystem:
                 ):
                     continue
 
-                collider_a = entity_a.get_aabb()
+                collider_a = world.collision_aabb(entity_a)
                 if collider_a is None:
                     continue
 
@@ -96,7 +96,7 @@ class CollisionSystem:
                     if entity_a is entity_b or not entity_b.alive:
                         continue
 
-                    collider_b = entity_b.get_aabb()
+                    collider_b = world.collision_aabb(entity_b)
                     if collider_b is None:
                         continue
 

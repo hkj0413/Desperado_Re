@@ -12,12 +12,14 @@
       "gravity": 2600.0,
       "jump_speed": 850.0,
       "max_fall_speed": 1400.0,
-      "dash_speed_multiplier": 5.0,
+      "dash_speed_multiplier": 10.0,
       "dash_duration_seconds": 0.1,
       "dash_cooldown_seconds": 3.0
     },
     "respawn": {
-      "wait_seconds": 5.0
+      "wait_seconds": 5.0,
+      "experience_loss_on_hp_zero_death": 10,
+      "pit_death_depth_below_world_bottom": 160.0
     },
     "party": {
       "max_hp": 100,
@@ -38,7 +40,7 @@
     "hkcaws": {
       "display_name": "HKCAWS",
       "stats": {
-        "move_speed": 360.0,
+        "move_speed": 270.0,
         "attack_speed_multiplier": 1.0
       },
       "ammo": {
@@ -75,22 +77,42 @@
           "reload": {
             "file_stem": "Reload_SG",
             "fps": 12.0
+          },
+          "die": {
+            "file_stem": "Die_SG",
+            "fps": 12.0,
+            "draw_offset_x": -48.0
           }
         }
       },
       "reload": {
         "mode": "standard",
         "action_duration_seconds": 1.43,
-        "animation_name": "reload"
+        "animation_name": "reload",
+        "stagger_immunity": true
       },
       "combat_rules": {
-        "attack_requires_idle_grounded": false
+        "attack_requires_idle_grounded": false,
+        "stagger_immune_bindings": [
+          "skill_s",
+          "skill_d",
+          "main_unique",
+          "main_ultimate"
+        ],
+        "basic_attack_allowed_states": [
+          "idle",
+          "walk",
+          "jump",
+          "fall",
+          "dash",
+          "hit"
+        ]
       }
     },
     "r93": {
       "display_name": "R93",
       "stats": {
-        "move_speed": 400.0,
+        "move_speed": 300.0,
         "attack_speed_multiplier": 1.0
       },
       "ammo": {
@@ -123,6 +145,11 @@
           "hit": {
             "file_stem": "Hit_RF",
             "fps": 12.0
+          },
+          "die": {
+            "file_stem": "Die_RF",
+            "fps": 12.0,
+            "draw_offset_x": -11.0
           }
         }
       },
@@ -132,12 +159,19 @@
         "release_delay_seconds": 0.15,
         "animation_name": "attack",
         "projectile_skill_id": "r93_reload_projectile",
-        "recoil_speed_multiplier": 2,
+        "recoil_speed_multiplier": 3,
         "jump_speed_multiplier": 0.5,
-        "requires_empty_magazine": true
+        "requires_empty_magazine": true,
+        "stagger_immunity": true
       },
       "combat_rules": {
-        "attack_requires_idle_grounded": true
+        "attack_requires_idle_grounded": true,
+        "stagger_immune_bindings": [
+          "skill_s",
+          "skill_d",
+          "main_unique",
+          "main_ultimate"
+        ]
       }
     }
   }

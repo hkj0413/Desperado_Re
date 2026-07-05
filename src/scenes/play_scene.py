@@ -158,10 +158,18 @@ class PlayScene(Scene):
         )
 
         self.world.commit()
+
+        # Terrain and spawns are now fixed. Bind every enemy to its
+        # precomputed static lane once, and emit a clear console warning for a
+        # bad spawn/patrol range instead of paying for runtime wall/pit probes.
+        for entity in self.world.entities_with_group('enemy'):
+            if isinstance(entity, Enemy):
+                entity.initialize_navigation(self.world)
+
         self.camera.follow(self.player.x, self.player.y)
 
         self.set_notice(
-            '←/→ 이동 · ↑ 점프 · Space 대시 · R 장전 · A 기본 공격 · Z 교체',
+            '←/→ 이동 · Space 점프 · Left Shift 대시 · R 장전 · A 기본 공격 · Z 교체',
             5.0,
         )
 
@@ -339,10 +347,10 @@ class PlayScene(Scene):
         if not projectile.register_target_hit(player, world):
             return
 
-        if player.take_damage(projectile.damage, app):
-            self.set_notice(
-                f'적 투사체 피해 {projectile.damage} · 피격 경직',
-                0.9,
+        if player.take_damage(projectile.damage, app, world):
+            self._show_player_damage_notice(
+                f'적 투사체 피해 {projectile.damage}',
+                player,
             )
 
     def _on_player_enemy(
@@ -366,23 +374,27 @@ class PlayScene(Scene):
         if not enemy.can_contact_attack(now):
             return
 
-        if not player.take_damage(enemy.contact_damage, app):
+        if not player.take_damage(enemy.contact_damage, app, world):
             return
 
         enemy.mark_contact_attack(now)
-
-        if player.hp <= 0:
-            self.set_notice(
-                f'{enemy.display_name} 접촉 피해 {enemy.contact_damage} · 사망',
-                1.2,
-            )
-            return
-
-        self.set_notice(
-            f'{enemy.display_name} 접촉 피해 {enemy.contact_damage} · '
-            '피격 경직',
-            0.9,
+        self._show_player_damage_notice(
+            f'{enemy.display_name} 접촉 피해 {enemy.contact_damage}',
+            player,
         )
+
+    def _show_player_damage_notice(
+        self,
+        prefix: str,
+        player: Player,
+    ) -> None:
+        outcome = player.last_damage_outcome
+        if outcome == 'dead_hp_zero':
+            self.set_notice(f'{prefix} · 사망 · 경험치 감소', 1.2)
+        elif outcome == 'stagger_immune':
+            self.set_notice(f'{prefix} · 경직 면역', 0.9)
+        else:
+            self.set_notice(f'{prefix} · 피격 경직', 0.9)
 
     def _on_player_item(
         self,

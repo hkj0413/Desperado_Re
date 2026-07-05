@@ -29,6 +29,7 @@ def create_enemy(
     return Enemy(
         enemy_id,
         app.data.record('enemies', enemy_id),
+        app.data.config()['enemy_shared'],
         x,
         y,
     )

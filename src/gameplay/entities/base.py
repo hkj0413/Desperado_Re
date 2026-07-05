@@ -48,6 +48,22 @@ class Entity:
         self.collision_group = collision_group
         self.alive = True
 
+    @property
+    def left(self) -> float:
+        return self.x - self.width * 0.5
+
+    @property
+    def right(self) -> float:
+        return self.x + self.width * 0.5
+
+    @property
+    def bottom(self) -> float:
+        return self.y - self.height * 0.5
+
+    @property
+    def top(self) -> float:
+        return self.y + self.height * 0.5
+
     def get_aabb(self) -> AABB | None:
         if self.collision_group is None:
             return None

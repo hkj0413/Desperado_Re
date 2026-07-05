@@ -35,11 +35,13 @@ class Player(Entity):
     """
 
     _COLLISION_EPSILON = 0.001
+    # New actions/items normally begin only from a calm grounded state.
+    # Standard SG reload is the explicit exception and checks locomotion_state
+    # independently below, matching the old Jump/Fall + Reload_SG behavior.
     _ACTION_ALLOWED_STATES = frozenset(('idle', 'walk'))
-    _RELOAD_ALLOWED_STATES = frozenset(('idle', 'walk'))
     _SWAP_ALLOWED_STATES = frozenset(('idle', 'walk'))
     _DASH_CANCEL_ALLOWED_STATES = frozenset(
-        ('idle', 'walk', 'jump', 'fall', 'attack', 'skill', 'hit')
+        ('idle', 'walk', 'jump', 'fall', 'attack', 'skill', 'reload', 'hit')
     )
     _ABILITY_FIELD_BY_BINDING = {
         'basic': 'basic_attack_id',
@@ -48,6 +50,19 @@ class Player(Entity):
         'main_unique': 'main_unique_skill_id',
         'main_ultimate': 'main_ultimate_skill_id',
     }
+    # Mirrors the original Desperado character-state classification while
+    # keeping it independent from movement and reload state.
+    _COMBAT_STATE_BY_BINDING = {
+        'basic': 0,
+        'main_unique': 1,
+        'skill_s': 2,
+        'skill_d': 3,
+        'main_ultimate': 4,
+    }
+    _STANDARD_RELOAD_ALLOWED_LOCOMOTION_STATES = frozenset(
+        ('idle', 'walk', 'jump', 'fall', 'dash')
+    )
+    _RECOIL_RELOAD_ALLOWED_LOCOMOTION_STATES = frozenset(('idle', 'walk'))
 
     def __init__(
         self,
@@ -86,6 +101,9 @@ class Player(Entity):
         # Reload effects may use a direction captured at reload start, not the
         # possibly changed shared facing at release time.
         self._pending_projectile_requests: list[tuple[str, int]] = []
+        # Last accepted hit is consumed only by PlayScene feedback text. It does
+        # not control gameplay; state remains the source of truth.
+        self.last_damage_outcome = 'none'
 
         self._apply_active_character_definition()
 
@@ -138,12 +156,74 @@ class Player(Entity):
         return self.action_state == 'hit'
 
     @property
+    def is_dodging(self) -> bool:
+        """Dash is the true dodge state: collision does not become a hit."""
+
+        return self.action_state == 'dash'
+
+    @property
+    def has_stagger_immunity(self) -> bool:
+        """Whether the currently running action absorbs hit-stun only.
+
+        It does *not* negate HP damage. A successful hit still starts the
+        common post-hit invulnerability window.
+        """
+
+        runtime = self.party.active_runtime
+        return bool(runtime.active_action_stagger_immune)
+
+    @property
     def action_state(self) -> CharacterActionState:
         return self.party.active_runtime.action_state
 
     @property
+    def locomotion_state(self) -> str:
+        """Physical state: idle/walk/jump/fall/dash, independent of actions."""
+
+        return self.party.active_runtime.locomotion_state
+
+    @property
+    def combat_state(self) -> int:
+        """0 basic/default, 1 unique, 2 S, 3 D, 4 ultimate."""
+
+        return self.party.active_runtime.combat_state
+
+    @property
+    def display_state(self) -> CharacterActionState:
+        """State intended for HUD text when an overlay action is active."""
+
+        runtime = self.party.active_runtime
+        if runtime.reload is not None:
+            return 'reload'
+        return runtime.action_state
+
+    @property
     def attack_speed_multiplier(self) -> float:
         return self.party.active_runtime.attack_speed_multiplier
+
+    @property
+    def is_standard_reload_active(self) -> bool:
+        """True while an SG-style reload owns its own timer and art."""
+
+        reload_state = self.party.active_runtime.reload
+        return reload_state is not None and reload_state.mode == 'standard'
+
+    def _active_standard_reload(self) -> ReloadRuntime | None:
+        reload_state = self.party.active_runtime.reload
+        if reload_state is not None and reload_state.mode == 'standard':
+            return reload_state
+        return None
+
+    @property
+    def is_visual_hidden(self) -> bool:
+        """Hide sprite and debug bounds only during respawn wait.
+
+        The Die animation remains visible while the action state is ``dead``.
+        ``PartyManager`` switches all member states to ``respawn_wait`` only
+        after that non-looping animation has completed.
+        """
+
+        return self.party.is_respawning or self.action_state == 'respawn_wait'
 
     @property
     def left(self) -> float:
@@ -176,10 +256,11 @@ class Player(Entity):
     ) -> str | None:
         """Handle only gameplay controls.
 
-        ← / → : horizontal movement
-        ↑     : jump
-        ↓     : held modifier for the R93 stationary reload
-        Space : dash
+        ← / →      : horizontal movement
+        Left Shift : dash
+        Space      : jump
+        ↑          : unassigned
+        ↓          : held modifier for the R93 stationary reload
         A     : basic attack
         S / D : skills
         X     : main-only unique skill
@@ -200,11 +281,12 @@ class Player(Entity):
                 self._down_held = True
                 return None
 
-            if event.key == pygame.K_UP:
+            # Up is intentionally left unassigned for a future feature.
+            if event.key == pygame.K_SPACE:
                 self._jump_requested = True
                 return None
 
-            if event.key == pygame.K_SPACE:
+            if event.key == pygame.K_LSHIFT:
                 return self.try_dash(app)
 
             if event.key == pygame.K_a:
@@ -306,6 +388,7 @@ class Player(Entity):
         return self._try_activate_skill(
             str(skill_id),
             app,
+            binding=binding,
             is_basic_attack=(binding == 'basic'),
             quiet_when_blocked=quiet_when_blocked,
         )
@@ -356,16 +439,24 @@ class Player(Entity):
         runtime.dash_active_until = now + duration
         self.party.shared_dash_ready_at = now + cooldown
 
-        # Cancel any current attack / skill / hit lock. The attack or skill's
-        # cooldown is deliberately not refunded.
+        # Dash cancels an ordinary attack/skill/recoil-reload exactly like the
+        # old state machine left its current skill state. A standard SG reload
+        # is the deliberate exception: its independent reload action continues
+        # through dash, jump, fall, and walking.
+        keep_standard_reload = self.is_standard_reload_active
+        if not keep_standard_reload:
+            self._cancel_active_action()
+
+        runtime.locomotion_state = 'dash'
         runtime.action_state = 'dash'
         runtime.action_locked_until = runtime.dash_active_until
 
-        # Jump, fall, and dash do not use separate image files. They display
-        # the active character's Walk_## (1).png without advancing frames.
-        runtime.animation_name = 'walk'
-        runtime.animation_elapsed = 0.0
-        runtime.animation_playback_speed = 1.0
+        if not keep_standard_reload:
+            # Jump, fall, and dash do not use separate image files. They display
+            # the active character's Walk_## (1).png without advancing frames.
+            runtime.animation_name = 'walk'
+            runtime.animation_elapsed = 0.0
+            runtime.animation_playback_speed = 1.0
 
         return '대시'
 
@@ -388,10 +479,26 @@ class Player(Entity):
         if self.party.is_respawning or runtime.action_state == 'respawn_wait':
             return '리스폰 대기 상태에서는 장전할 수 없습니다.'
 
-        if runtime.action_state not in self._RELOAD_ALLOWED_STATES:
-            return '현재 행동 중에는 장전할 수 없습니다.'
+        if runtime.reload is not None:
+            return '이미 장전 중입니다.'
 
         reload_definition = self._definition['reload']
+        mode = str(reload_definition['mode'])
+
+        # Reload is its own action layer.  Unlike the old combined action_state
+        # gate, an SG standard reload may begin while the physical state is
+        # jump, fall, walk, or dash.  It cannot begin over an active attack,
+        # skill, or hit-stun; those are distinct foreground actions.
+        if runtime.active_action_id is not None or runtime.action_state == 'hit':
+            return '현재 행동 중에는 장전할 수 없습니다.'
+
+        allowed_locomotion_states = (
+            self._STANDARD_RELOAD_ALLOWED_LOCOMOTION_STATES
+            if mode == 'standard'
+            else self._RECOIL_RELOAD_ALLOWED_LOCOMOTION_STATES
+        )
+        if runtime.locomotion_state not in allowed_locomotion_states:
+            return '현재 이동 상태에서는 장전할 수 없습니다.'
 
         if bool(reload_definition.get('requires_empty_magazine', False)):
             if any(
@@ -406,7 +513,6 @@ class Player(Entity):
         ):
             return '탄약이 이미 가득 찼습니다.'
 
-        mode = str(reload_definition['mode'])
         duration = float(reload_definition['action_duration_seconds'])
         animation_name = str(reload_definition['animation_name'])
 
@@ -434,6 +540,22 @@ class Player(Entity):
                     reload_definition['recoil_speed_multiplier']
                 )
 
+        # An SG standard reload empties its magazine immediately. The reload
+        # cannot visually be in progress while leftover shells are still usable.
+        # Ammunition is restored only when complete_at is reached.
+        if mode == 'standard':
+            for ammo_type in runtime.max_ammo:
+                runtime.ammo[ammo_type] = 0
+
+        natural_duration = CharacterSpriteCache.get_animation_duration(
+            app,
+            self._definition,
+            animation_name,
+        )
+        playback_speed = 1.0
+        if natural_duration is not None and duration > 0.0:
+            playback_speed = natural_duration / duration
+
         runtime.reload = ReloadRuntime(
             mode=mode,
             direction=direction,
@@ -441,6 +563,9 @@ class Player(Entity):
             projectile_skill_id=projectile_skill_id,
             recoil_speed=recoil_speed,
             jump_speed=jump_speed,
+            complete_at=now + duration,
+            animation_name=animation_name,
+            animation_playback_speed=max(0.01, playback_speed),
         )
 
         self.begin_action(
@@ -449,6 +574,14 @@ class Player(Entity):
             now,
             app,
             animation_name=animation_name,
+            action_id=f'reload:{self.character_id}',
+            stagger_immune=bool(
+                reload_definition.get('stagger_immunity', True)
+            ),
+            # The reload sheet is an overlay. Standard SG reload deliberately
+            # leaves the physical jump/fall/walk/dash state untouched.
+            preserve_locomotion=(mode == 'standard'),
+            combat_state=0,
         )
 
         if mode == 'recoil_projectile':
@@ -461,43 +594,60 @@ class Player(Entity):
         return '장전'
 
     def _advance_reload(self, now: float) -> None:
-        """Release a delayed recoil reload exactly once."""
+        """Advance reload timers independently from action_state.
+
+        SG standard reloads remain active even when their physical state turns
+        into jump, fall, dash, or hit. R93 keeps its delayed projectile release
+        but uses the same independent completion time.
+        """
 
         runtime = self.party.active_runtime
         reload_state = runtime.reload
-
-        if (
-            runtime.action_state != 'reload'
-            or reload_state is None
-            or reload_state.released
-            or reload_state.release_at is None
-            or now < reload_state.release_at
-        ):
+        if reload_state is None:
             return
 
-        reload_state.released = True
+        if (
+            reload_state.mode == 'recoil_projectile'
+            and not reload_state.released
+            and reload_state.release_at is not None
+            and now >= reload_state.release_at
+        ):
+            reload_state.released = True
 
-        if reload_state.projectile_skill_id is not None:
-            self._pending_projectile_requests.append(
-                (
-                    reload_state.projectile_skill_id,
-                    reload_state.direction,
+            if reload_state.projectile_skill_id is not None:
+                self._pending_projectile_requests.append(
+                    (
+                        reload_state.projectile_skill_id,
+                        reload_state.direction,
+                    )
                 )
-            )
 
-        # The old R93 reload performs a small upward kick in both variants.
-        # Only the non-↓ variant also receives horizontal backward recoil.
-        if reload_state.jump_speed > 0.0:
-            self.velocity_y = max(self.velocity_y, reload_state.jump_speed)
-            self.is_grounded = False
+            # The old R93 reload performs a small upward kick in both variants.
+            # Only the non-↓ variant also receives horizontal backward recoil.
+            if reload_state.jump_speed > 0.0:
+                self.velocity_y = max(self.velocity_y, reload_state.jump_speed)
+                self.is_grounded = False
+
+        if now >= reload_state.complete_at:
+            self._finish_reload()
 
     def _finish_reload(self) -> None:
-        """Complete a successful reload by restoring this character's magazine."""
+        """Complete one still-active reload by restoring its magazine.
+
+        A cancelled reload has ``runtime.reload is None``. It must never refill
+        ammo merely because an old visible ``reload`` state reaches its former
+        timer, especially after death or a dash cancellation.
+        """
 
         runtime = self.party.active_runtime
+        if runtime.reload is None:
+            return
+
         for ammo_type, maximum in runtime.max_ammo.items():
             runtime.ammo[ammo_type] = maximum
         runtime.reload = None
+        if runtime.active_action_id == f'reload:{self.character_id}':
+            self._clear_active_action_metadata()
 
     def try_use_selected_hotbar_item(self, app: GameApp) -> str | None:
         """Use the currently selected shared item with W.
@@ -506,7 +656,11 @@ class Player(Entity):
         """
 
         now = app.timer.game_time
+        self._advance_reload(now)
         self._refresh_temporary_action_state(now)
+
+        if self.is_standard_reload_active:
+            return '장전 중에는 아이템을 사용할 수 없습니다.'
 
         if self.action_state not in self._ACTION_ALLOWED_STATES:
             return '현재 행동 중에는 아이템을 사용할 수 없습니다.'
@@ -553,20 +707,47 @@ class Player(Entity):
         amount = self.party.shared_inventory.get(item_id, 0)
         return f'핫바 선택: {item_id} x{amount}'
 
+    def _can_start_ability_from_current_state(
+        self,
+        is_basic_attack: bool,
+    ) -> bool:
+        """Return whether the active state allows this input to begin.
+
+        The old Desperado state machine let SG's basic attack visually override
+        jump/fall/hit/dash. Re: keeps that rule data-driven: HKCAWS lists every
+        locomotion/reaction state from which its basic attack can begin, while
+        R93 and all skills retain the normal grounded idle/walk gate.
+        """
+
+        runtime = self.party.active_runtime
+        if is_basic_attack:
+            configured_states = self._definition.get(
+                'combat_rules', {}
+            ).get('basic_attack_allowed_states')
+            if isinstance(configured_states, list):
+                return runtime.action_state in configured_states
+
+        return runtime.action_state in self._ACTION_ALLOWED_STATES
+
     def _try_activate_skill(
         self,
         skill_id: str,
         app: GameApp,
         *,
+        binding: str,
         is_basic_attack: bool,
         quiet_when_blocked: bool,
     ) -> str | None:
         now = app.timer.game_time
+        self._advance_reload(now)
         self._refresh_temporary_action_state(now)
 
         runtime = self.party.active_runtime
 
-        if runtime.action_state not in self._ACTION_ALLOWED_STATES:
+        if self.is_standard_reload_active:
+            return None if quiet_when_blocked else '장전 중에는 스킬을 사용할 수 없습니다.'
+
+        if not self._can_start_ability_from_current_state(is_basic_attack):
             return None if quiet_when_blocked else (
                 '현재 행동 중에는 스킬을 사용할 수 없습니다.'
             )
@@ -646,12 +827,25 @@ class Player(Entity):
             )
         )
 
+        default_stagger_immunity = binding in set(
+            self._definition.get('combat_rules', {}).get(
+                'stagger_immune_bindings',
+                (),
+            )
+        )
+        stagger_immune = bool(
+            skill.get('stagger_immunity', default_stagger_immunity)
+        )
+
         self.begin_action(
             str(skill['action_state']),
             action_duration,
             now,
             app,
             animation_name=animation_name,
+            action_id=skill_id,
+            stagger_immune=stagger_immune,
+            combat_state=self._COMBAT_STATE_BY_BINDING[binding],
         )
 
         self._pending_skill_ids.append(skill_id)
@@ -665,6 +859,10 @@ class Player(Entity):
         app: GameApp,
         *,
         animation_name: str,
+        action_id: str | None = None,
+        stagger_immune: bool = False,
+        preserve_locomotion: bool = False,
+        combat_state: int = 0,
     ) -> None:
         """Start a swap-blocking action and fit its animation to that duration."""
 
@@ -689,11 +887,75 @@ class Player(Entity):
         if natural_duration is not None and duration_seconds > 0.0:
             playback_speed = natural_duration / duration_seconds
 
-        runtime.action_state = action_state
+        # Starting an attack/skill from dash ends dash movement. A standard
+        # reload is different: it is an overlay and must preserve whichever
+        # locomotion state (walk/jump/fall/dash) is currently active.
+        if runtime.locomotion_state == 'dash' and not preserve_locomotion:
+            runtime.dash_active_until = 0.0
+            runtime.locomotion_state = 'fall' if not self.is_grounded else 'idle'
+
+        if not preserve_locomotion:
+            runtime.action_state = action_state
         runtime.action_locked_until = now + duration_seconds
+        runtime.active_action_id = action_id
+        runtime.combat_state = max(0, min(4, int(combat_state)))
+        runtime.active_action_stagger_immune = bool(stagger_immune)
+        runtime.active_action_animation_name = animation_name
+        runtime.active_action_animation_playback_speed = max(0.01, playback_speed)
         runtime.animation_name = animation_name
         runtime.animation_elapsed = 0.0
-        runtime.animation_playback_speed = max(0.01, playback_speed)
+        runtime.animation_playback_speed = runtime.active_action_animation_playback_speed
+
+    def _clear_active_action_metadata(self) -> None:
+        runtime = self.party.active_runtime
+        runtime.active_action_id = None
+        runtime.active_action_stagger_immune = False
+        runtime.active_action_animation_name = None
+        runtime.active_action_animation_playback_speed = 1.0
+        runtime.combat_state = 0
+
+    def _has_active_action_presentation(self, now: float) -> bool:
+        """Whether a timed action currently owns the visible animation.
+
+        Standard reload deliberately survives dash/jump/fall. Dash has its own
+        short lock, so it must not shorten the reload presentation timer.
+        """
+
+        runtime = self.party.active_runtime
+        reload_state = runtime.reload
+        if reload_state is not None and now < reload_state.complete_at:
+            return True
+
+        return (
+            runtime.active_action_id is not None
+            and now < runtime.action_locked_until
+            and runtime.active_action_animation_name is not None
+        )
+
+    def _cancel_active_action(self) -> None:
+        """Cancel an action without refunding cooldown/ammo or filling reloads.
+
+        This is used by dash, normal hit-stun, and death. A reload's ammunition
+        remains at the value it had when cancelled—standard reload is already
+        zeroed on start, and R93 must already be empty to start.
+        """
+
+        runtime = self.party.active_runtime
+        runtime.reload = None
+        runtime.action_locked_until = 0.0
+        self._clear_active_action_metadata()
+
+    def _cancel_pending_player_effects(self, world: World | None) -> None:
+        """Drop unspawned and already spawned player attacks on death.
+
+        The project has one world player, so removing player_projectile is the
+        correct strict cancellation behavior for an interrupted death state.
+        """
+
+        self._pending_skill_ids.clear()
+        self._pending_projectile_requests.clear()
+        if world is not None:
+            world.remove_all_in_group('player_projectile')
 
     def consume_pending_skill_ids(self) -> tuple[str, ...]:
         """Return successful actions awaiting PlayScene world spawning."""
@@ -709,24 +971,36 @@ class Player(Entity):
         self._pending_projectile_requests.clear()
         return pending
 
-    def take_damage(self, amount: int, app: GameApp) -> bool:
-        """Apply contact/projectile damage unless dash-stealthed or invulnerable.
+    def take_damage(
+        self,
+        amount: int,
+        app: GameApp,
+        world: World | None = None,
+    ) -> bool:
+        """Apply a hit through dodge, immunity, stagger, and death states.
 
-        A normal hit starts a 0.5-second hit-stun / invulnerability period.
-        Dash is not normal invulnerability: it is stealth and the collision
-        handler skips the player completely while dashing.
+        * Dash/dodge: collision is rejected before any HP change.
+        * Post-hit invulnerability: later hits are ignored entirely.
+        * Stagger immunity: HP falls and the 0.5s protection starts, but the
+          existing skill/reload state, animation, and pending completion stay.
+        * Ordinary action: HP falls, current action is cancelled, then hit-stun.
+        * HP zero: all active actions/effects are cancelled and Die overrides
+          every other state.
         """
 
         now = app.timer.game_time
         runtime = self.party.active_runtime
+        self.last_damage_outcome = 'none'
 
         if self.party.shared_hp <= 0 or self.party.is_respawning:
             return False
 
-        if self.is_stealthed:
+        if self.is_dodging:
+            self.last_damage_outcome = 'dodged'
             return False
 
         if now < runtime.hit_invulnerable_until:
+            self.last_damage_outcome = 'invulnerable'
             return False
 
         damage = max(0, int(amount))
@@ -734,12 +1008,6 @@ class Player(Entity):
             return False
 
         self.party.apply_damage(damage)
-
-        # A real hit interrupts a reload before its release moment. This keeps
-        # an un-fired recoil projectile from appearing after the character was
-        # already knocked into hit-stun.
-        runtime.reload = None
-
         invulnerability_seconds = max(
             0.0,
             float(
@@ -748,26 +1016,91 @@ class Player(Entity):
                 ]
             ),
         )
-        until = now + invulnerability_seconds
-
-        runtime.hit_invulnerable_until = until
-        runtime.action_locked_until = until
+        runtime.hit_invulnerable_until = now + invulnerability_seconds
 
         if self.party.shared_hp <= 0:
-            # The next update converts this one-frame death state into the
-            # shared respawn wait. Dash and swapping are blocked immediately.
-            runtime.action_state = 'dead'
-            runtime.action_locked_until = float('inf')
-            runtime.animation_name = 'hit'
-            runtime.animation_elapsed = 0.0
-            runtime.animation_playback_speed = 1.0
-        else:
-            runtime.action_state = 'hit'
-            runtime.animation_name = 'hit'
-            runtime.animation_elapsed = 0.0
-            runtime.animation_playback_speed = 1.0
+            self._begin_death('hp_zero', now, app, world)
+            self.last_damage_outcome = 'dead_hp_zero'
+            return True
 
+        if self.has_stagger_immunity:
+            # Do not alter action_locked_until, action_state, active skill id,
+            # reload runtime, or animation. Damage and protection only.
+            self.last_damage_outcome = 'stagger_immune'
+            return True
+
+        self._cancel_active_action()
+        runtime.action_state = 'hit'
+        runtime.action_locked_until = now + invulnerability_seconds
+        runtime.animation_name = 'hit'
+        runtime.animation_elapsed = 0.0
+        runtime.animation_playback_speed = 1.0
+        self.last_damage_outcome = 'staggered'
         return True
+
+    def die_from_pit(
+        self,
+        world: World,
+        app: GameApp,
+    ) -> bool:
+        """Enter the distinct fall-death route without changing HP or XP."""
+
+        if self.party.shared_hp <= 0 or self.party.is_respawning:
+            return False
+
+        self._begin_death('pit', app.timer.game_time, app, world)
+        self.last_damage_outcome = 'pit_death'
+        return True
+
+    def _begin_death(
+        self,
+        cause: str,
+        now: float,
+        app: GameApp,
+        world: World | None,
+    ) -> None:
+        """Make death the hard top-priority state.
+
+        No attack, skill, reload, dash, temporary speed modifier, queued effect,
+        or active player projectile survives this transition. HP-zero applies a
+        configurable experience loss clamped at zero; pit death applies none.
+        """
+
+        if self.action_state in ('dead', 'respawn_wait') or self.party.is_respawning:
+            return
+
+        if cause == 'hp_zero':
+            penalty = int(
+                self.party.shared_settings['respawn'].get(
+                    'experience_loss_on_hp_zero_death',
+                    0,
+                )
+            )
+            self.party.lose_experience(penalty)
+
+        self.party.begin_shared_death(cause)
+        self._cancel_pending_player_effects(world)
+
+        runtime = self.party.active_runtime
+        death_duration = CharacterSpriteCache.get_animation_duration(
+            app,
+            self._definition,
+            'die',
+        )
+        runtime.locomotion_state = 'idle'
+        runtime.combat_state = 0
+        runtime.action_state = 'dead'
+        runtime.action_locked_until = now + max(0.0, death_duration or 0.0)
+        runtime.animation_name = 'die'
+        runtime.animation_elapsed = 0.0
+        runtime.animation_playback_speed = 1.0
+        runtime.active_action_id = None
+        runtime.active_action_stagger_immune = False
+        runtime.active_action_animation_name = None
+        runtime.active_action_animation_playback_speed = 1.0
+        self.velocity_y = 0.0
+        self.is_grounded = False
+        self._jump_requested = False
 
     def enter_respawn_wait(self, app: GameApp) -> None:
         """Start the five-second party-wide wait after death."""
@@ -798,6 +1131,10 @@ class Player(Entity):
         runtime = self.party.active_runtime
 
         if runtime.action_state == 'dead':
+            # Keep the visible Die motion alive until its final frame. Only then
+            # does PartyManager switch the player to invisible respawn_wait.
+            if now < runtime.action_locked_until:
+                return True
             self.enter_respawn_wait(app)
             return True
 
@@ -859,7 +1196,7 @@ class Player(Entity):
 
         if self._update_respawn_state(now, app):
             self._jump_requested = False
-            self._update_animation(delta_seconds, direction)
+            self._update_animation(delta_seconds, direction, now)
             return
 
         self._advance_reload(now)
@@ -879,7 +1216,16 @@ class Player(Entity):
         # are kept so movement resumes naturally when the stun ends.
         movement_inputs_locked = self.is_hit_stunned
 
-        if self.action_state == 'dash':
+        runtime = self.party.active_runtime
+        reload_state = runtime.reload
+        # Reload is intentionally not a movement-blocking combat action. Its
+        # sheet overlays locomotion, whereas ordinary attack/skill actions stop
+        # horizontal movement and fresh jumps until their lock is over.
+        blocking_combat_action_active = (
+            runtime.active_action_id is not None and reload_state is None
+        )
+
+        if runtime.locomotion_state == 'dash':
             dash_speed = (
                 self.move_speed
                 * float(
@@ -889,67 +1235,47 @@ class Player(Entity):
                 )
             )
             self._move_horizontally(
-                self.party.active_runtime.dash_direction
-                * dash_speed
-                * delta_seconds,
+                runtime.dash_direction * dash_speed * delta_seconds,
                 world,
             )
 
-        elif self.action_state == 'reload':
-            # HKCAWS's standard reload remains an action state but permits
-            # normal horizontal movement and jumping. R93's recoil reload does
-            # not accept movement input; after release it supplies only its own
-            # scripted backward impulse.
-            reload_state = self.party.active_runtime.reload
-            if (
-                reload_state is not None
-                and reload_state.mode == 'standard'
-                and not movement_inputs_locked
-                and direction != 0
-            ):
-                self.facing = direction
-                self._move_horizontally(
-                    direction * self.move_speed * delta_seconds,
-                    world,
-                )
-            elif (
-                reload_state is not None
-                and reload_state.released
-                and reload_state.recoil_speed > 0.0
-            ):
-                self._move_horizontally(
-                    -reload_state.direction
-                    * reload_state.recoil_speed
-                    * delta_seconds,
-                    world,
-                )
+        elif (
+            reload_state is not None
+            and reload_state.mode == 'recoil_projectile'
+            and reload_state.released
+            and reload_state.recoil_speed > 0.0
+        ):
+            # R93 recoil reload supplies its own scripted horizontal impulse.
+            self._move_horizontally(
+                -reload_state.direction * reload_state.recoil_speed * delta_seconds,
+                world,
+            )
 
         elif (
-            self.action_state in self._ACTION_ALLOWED_STATES
+            not blocking_combat_action_active
             and not movement_inputs_locked
             and direction != 0
         ):
-            # Basic attacks/skills deliberately do not enter this branch: an
-            # attack started while walking immediately stops movement and only
-            # resumes from held input after the action has finished.
+            # Locomotion is independent from SG standard reload. The reload
+            # overlay may run during walking, jumping, or falling, while an
+            # actual attack/skill action still intentionally stops horizontal
+            # input until its own action lock finishes.
             self.facing = direction
             self._move_horizontally(
                 direction * self.move_speed * delta_seconds,
                 world,
             )
 
-        reload_state = self.party.active_runtime.reload
         can_jump_while_reloading = (
-            self.action_state == 'reload'
-            and reload_state is not None
-            and reload_state.mode == 'standard'
+            reload_state is not None and reload_state.mode == 'standard'
         )
         if (
             self._jump_requested
             and self.is_grounded
             and not movement_inputs_locked
+            and not blocking_combat_action_active
             and (
-                self.action_state in self._ACTION_ALLOWED_STATES
+                runtime.locomotion_state in ('idle', 'walk')
                 or can_jump_while_reloading
             )
         ):
@@ -958,10 +1284,16 @@ class Player(Entity):
             self._set_airborne_state('jump')
 
         self._move_vertically(delta_seconds, world)
+        if self._is_below_pit_death_boundary(world):
+            self.die_from_pit(world, app)
+            self._jump_requested = False
+            self._update_animation(delta_seconds, direction, now)
+            return
+
         self._clamp_to_world_bounds(world)
 
         self._jump_requested = False
-        self._update_animation(delta_seconds, direction)
+        self._update_animation(delta_seconds, direction, now)
 
     def _apply_active_character_definition(self) -> None:
         self._definition = self.party.active_definition
@@ -978,8 +1310,12 @@ class Player(Entity):
         self.max_fall_speed = float(movement['max_fall_speed'])
 
     def _swap_block_reason(self, now: float) -> str | None:
+        self._advance_reload(now)
         self._refresh_temporary_action_state(now)
         runtime = self.party.active_runtime
+
+        if runtime.reload is not None:
+            return '장전 중입니다.'
 
         if self.party.shared_hp <= 0 or runtime.action_state == 'dead':
             return '사망 상태입니다.'
@@ -1008,16 +1344,70 @@ class Player(Entity):
 
         return None
 
+    def _finish_dash_locomotion(self) -> None:
+        """Release a completed dash back into the current physical movement.
+
+        Dash is a locomotion state as well as a temporary action presentation.
+        It must remain intact through vertical physics until its own duration
+        ends; otherwise gravity would replace it with ``jump``/``fall`` on the
+        same frame that the dash starts.
+        """
+
+        runtime = self.party.active_runtime
+        if runtime.locomotion_state != 'dash':
+            return
+
+        if self.is_grounded:
+            # Clear dash as a dodge/reaction state before the grounded setter.
+            # A standard reload may still be active as an animation overlay,
+            # but it must not keep the player invulnerable after dash ends.
+            runtime.locomotion_state = 'idle'
+            runtime.action_state = 'idle'
+            self._set_grounded_state()
+            return
+
+        state = 'jump' if self.velocity_y > 0.0 else 'fall'
+        runtime.locomotion_state = state
+        runtime.action_state = state
+        self._set_airborne_state(state)
+
     def _refresh_temporary_action_state(self, now: float) -> None:
         runtime = self.party.active_runtime
+        reload_state = runtime.reload
 
-        if runtime.action_state not in (
-            'attack',
-            'skill',
-            'reload',
-            'hit',
-            'dash',
-        ):
+        # Reload owns its actual completion time independently of locomotion.
+        # A dash can temporarily own locomotion, but it must never shorten a
+        # standard reload or clear its animation/action metadata.
+        if reload_state is not None:
+            if now >= reload_state.complete_at:
+                self._finish_reload()
+            else:
+                if (
+                    runtime.locomotion_state == 'dash'
+                    and now >= runtime.dash_active_until
+                ):
+                    self._finish_dash_locomotion()
+                return
+
+        # A regular attack/skill may have begun while jumping or falling.
+        # Once its action lock ends, release it back to the current physical
+        # state instead of leaving an expired animation overlay behind.
+        if runtime.active_action_id is not None:
+            if now < runtime.action_locked_until:
+                return
+
+            self._clear_active_action_metadata()
+            if not self.is_grounded:
+                state = 'jump' if self.velocity_y > 0.0 else 'fall'
+                self._set_airborne_state(state)
+                return
+
+            self._set_grounded_state()
+            return
+
+        # Dash and ordinary hit-stun have no active action overlay, but still
+        # own a short lock in action_state.
+        if runtime.action_state not in ('hit', 'dash', 'reload'):
             return
 
         if now < runtime.action_locked_until:
@@ -1026,9 +1416,17 @@ class Player(Entity):
         if runtime.action_state == 'reload':
             self._finish_reload()
 
-        # When a timed action finishes in the air, do not incorrectly return
-        # to idle/walk. The player remains in jump or fall until terrain
-        # collision says that they have landed.
+        if runtime.action_state == 'dash':
+            self._finish_dash_locomotion()
+            return
+
+        # Hit ends only after its 0.5-second lock. Clear the reaction state
+        # before applying the physical idle/walk/jump/fall state so the visible
+        # Hit sheet is not replaced by gravity or landing in the same frame.
+        if runtime.action_state == 'hit':
+            runtime.action_state = 'idle'
+            runtime.action_locked_until = 0.0
+
         if not self.is_grounded:
             state = 'jump' if self.velocity_y > 0.0 else 'fall'
             self._set_airborne_state(state)
@@ -1040,11 +1438,54 @@ class Player(Entity):
         self,
         delta_seconds: float,
         direction: int,
+        now: float,
     ) -> None:
         runtime = self.party.active_runtime
 
-        if runtime.action_state in ('idle', 'walk'):
+        # Death and hit-stun are foreground reactions. They must be checked
+        # before locomotion because vertical physics still updates while they
+        # are active. Without this priority, fall/landing immediately replaced
+        # the Die or Hit sheet on the same frame.
+        if runtime.action_state == 'dead':
+            runtime.animation_name = 'die'
+            runtime.animation_playback_speed = 1.0
+            runtime.animation_elapsed += delta_seconds
+            return
+
+        if runtime.action_state == 'respawn_wait':
+            return
+
+        if runtime.action_state == 'hit':
+            runtime.animation_name = 'hit'
+            runtime.animation_playback_speed = 1.0
+            runtime.animation_elapsed += delta_seconds
+            return
+
+        # Visual priority intentionally follows the old character state
+        # machine: active attack/reload/skill sheets render before locomotion.
+        # Reload owns a separate completion timer because dash/jump/fall can
+        # temporarily own locomotion without canceling it.
+        reload_state = runtime.reload
+        if reload_state is not None and now < reload_state.complete_at:
+            runtime.animation_name = reload_state.animation_name
+            runtime.animation_playback_speed = (
+                reload_state.animation_playback_speed
+            )
+            runtime.animation_elapsed += delta_seconds
+            return
+
+        # Jump/fall may still own physics, but cannot reset this elapsed timer.
+        if self._has_active_action_presentation(now):
+            runtime.animation_name = str(runtime.active_action_animation_name)
+            runtime.animation_playback_speed = (
+                runtime.active_action_animation_playback_speed
+            )
+            runtime.animation_elapsed += delta_seconds
+            return
+
+        if runtime.locomotion_state in ('idle', 'walk'):
             next_name = 'walk' if direction != 0 else 'idle'
+            runtime.locomotion_state = next_name
             runtime.action_state = next_name
 
             if runtime.animation_name != next_name:
@@ -1055,47 +1496,67 @@ class Player(Entity):
                 runtime.animation_elapsed += delta_seconds
             return
 
-        if runtime.action_state in ('jump', 'fall', 'dash'):
-            # All three states intentionally hold Walk_## (1).png:
-            # elapsed must not advance while airborne or dashing.
+        if runtime.locomotion_state in ('jump', 'fall', 'dash'):
+            # All three states hold Walk_## (1).png only when no active action
+            # presentation is running above them.
             runtime.animation_name = 'walk'
             runtime.animation_elapsed = 0.0
             runtime.animation_playback_speed = 1.0
             return
 
-        # attack / skill / reload / hit keeps its own animation until the
-        # action lock ends.
         runtime.animation_elapsed += delta_seconds
 
     def _set_airborne_state(self, state: str) -> None:
-        """Enter jump/fall and hold Walk_## (1).png on screen."""
+        """Update physical jump/fall without canceling foreground state.
+
+        Dash remains a timed locomotion state until ``_finish_dash_locomotion``
+        releases it. Hit and death may still receive gravity/landing physics,
+        but retain their own visible reaction animation.
+        """
 
         if state not in ('jump', 'fall'):
             raise ValueError('Airborne state must be "jump" or "fall".')
 
         runtime = self.party.active_runtime
+        if runtime.locomotion_state == 'dash':
+            return
+
+        runtime.locomotion_state = state
+
+        if (
+            runtime.reload is not None
+            or runtime.active_action_id is not None
+            or runtime.action_state in ('hit', 'dead', 'respawn_wait')
+        ):
+            return
+
         runtime.action_state = state
         runtime.animation_name = 'walk'
         runtime.animation_elapsed = 0.0
         runtime.animation_playback_speed = 1.0
 
     def _set_grounded_state(self) -> None:
-        """Return to natural idle/walk without restarting it every frame.
-
-        Terrain contact is checked every update, so resetting
-        ``animation_elapsed`` here unconditionally would pin Idle and Walk to
-        frame (1). The timer is reset only when the visible state actually
-        changes, such as landing after jump/fall or releasing a movement key.
-        """
+        """Update physical idle/walk without restarting foreground actions."""
 
         runtime = self.party.active_runtime
+        if runtime.locomotion_state == 'dash':
+            return
+
         direction = int(self._right_held) - int(self._left_held)
         state = 'walk' if direction != 0 else 'idle'
+        runtime.locomotion_state = state
 
         already_in_same_animation = (
             runtime.action_state == state
             and runtime.animation_name == state
         )
+
+        if (
+            runtime.reload is not None
+            or runtime.active_action_id is not None
+            or runtime.action_state in ('hit', 'dead', 'respawn_wait')
+        ):
+            return
 
         runtime.action_state = state
         runtime.animation_name = state
@@ -1167,12 +1628,10 @@ class Player(Entity):
             # becomes fall. It remains fall until _resolve_landing() detects a
             # real terrain collision and sets is_grounded.
             if self.is_grounded:
-                # A ground contact happens every physics frame while standing.
-                # Only jump/fall are released by landing. Attack, skill, hit,
-                # and dash keep their own action locks until their timers end.
-                if self.action_state in ('idle', 'walk', 'jump', 'fall'):
-                    self._set_grounded_state()
-            elif self.action_state in ('idle', 'walk', 'jump', 'fall'):
+                # Physical landing always updates locomotion. Foreground
+                # attack/skill/reload presentation remains untouched.
+                self._set_grounded_state()
+            else:
                 self._set_airborne_state('fall')
             return
 
@@ -1181,9 +1640,8 @@ class Player(Entity):
         # A ceiling impact can set velocity_y to zero. In that case the player
         # begins falling immediately and still stays in fall until landing.
         if self.velocity_y <= 0.0:
-            if self.action_state in ('idle', 'walk', 'jump', 'fall'):
-                self._set_airborne_state('fall')
-        elif self.action_state in ('idle', 'walk', 'jump', 'fall'):
+            self._set_airborne_state('fall')
+        else:
             self._set_airborne_state('jump')
 
     def _resolve_landing(
@@ -1246,6 +1704,20 @@ class Player(Entity):
     def _horizontal_overlaps(self, block: TerrainBlock) -> bool:
         return self.right > block.left and self.left < block.right
 
+    def _is_below_pit_death_boundary(self, world: World) -> bool:
+        depth = max(
+            0.0,
+            float(
+                self.party.shared_settings['respawn'].get(
+                    'pit_death_depth_below_world_bottom',
+                    160.0,
+                )
+            ),
+        )
+        # Use the whole collider: the player must fully pass the threshold, not
+        # die the instant its feet leave the camera/world bottom.
+        return self.top < world.bounds.bottom - depth
+
     def _clamp_to_world_bounds(self, world: World) -> None:
         bounds = world.bounds
         half_width = self.width * 0.5
@@ -1255,14 +1727,6 @@ class Player(Entity):
             self.x = bounds.left + half_width
         elif self.right > bounds.right:
             self.x = bounds.right - half_width
-
-        if self.bottom < bounds.bottom:
-            self.y = bounds.bottom + half_height
-            self.velocity_y = max(0.0, self.velocity_y)
-            self.is_grounded = True
-
-            if self.action_state in ('jump', 'fall'):
-                self._set_grounded_state()
 
         if self.top > bounds.top:
             self.y = bounds.top - half_height
@@ -1275,6 +1739,9 @@ class Player(Entity):
         app: GameApp,
         camera: Camera,
     ) -> None:
+        if self.is_visual_hidden:
+            return
+
         visual = self._definition['visual']
         draw_width = float(visual['draw_width'])
         draw_height = float(visual['draw_height'])
@@ -1308,6 +1775,9 @@ class Player(Entity):
         ):
             return
 
+        action_presentation_active = self._has_active_action_presentation(
+            app.timer.game_time
+        )
         image = CharacterSpriteCache.get_frame(
             app,
             self._definition,
@@ -1315,7 +1785,11 @@ class Player(Entity):
             runtime.animation_elapsed,
             self.facing,
             playback_speed=runtime.animation_playback_speed,
-            loop=runtime.action_state in ('idle', 'walk', 'dash'),
+            loop=(
+                False
+                if action_presentation_active
+                else runtime.action_state in ('idle', 'walk', 'dash')
+            ),
         )
         rect = camera.rect_from_world_center(
             visual_center_x,

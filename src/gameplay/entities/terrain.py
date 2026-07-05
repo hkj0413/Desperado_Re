@@ -22,6 +22,9 @@ class TerrainBlock(Entity):
     """
 
     _surface_cache: dict[tuple[str, int], pygame.Surface] = {}
+    # Existing terrain instances survive F5 data reloads. A revision lets each
+    # block discard its own bound surface lazily on the next visible draw.
+    _surface_cache_revision = 0
 
     def __init__(
         self,
@@ -57,10 +60,15 @@ class TerrainBlock(Entity):
             Path(block_directory)
             / f'Block ({self.block_number}).png'
         )
+        # Avoid rebuilding Path/cache keys for every visible tile every frame.
+        # The actual surface remains shared through the class cache.
+        self._bound_surface: pygame.Surface | None = None
+        self._bound_surface_revision = -1
 
     @classmethod
     def clear_cache(cls) -> None:
         cls._surface_cache.clear()
+        cls._surface_cache_revision += 1
 
     @classmethod
     def preload_all_stage_blocks(cls, app: GameApp) -> int:
@@ -114,6 +122,24 @@ class TerrainBlock(Entity):
     def is_one_way(self) -> bool:
         return self.collision_mode == 'one_way'
 
+    def draw_command(
+        self,
+        app: GameApp,
+        camera: Camera,
+    ) -> tuple[pygame.Surface, tuple[int, int]]:
+        """Return one cached terrain blit command for World.draw batching."""
+
+        # World already filters terrain by visible columns and exact viewport
+        # overlap before invoking this method. Repeating that test per block is
+        # redundant for every tile on screen.
+        rect = camera.rect_from_world_center(
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+        )
+        return self._surface_for_draw(app), rect.topleft
+
     def draw(
         self,
         screen: pygame.Surface,
@@ -121,21 +147,20 @@ class TerrainBlock(Entity):
         app: GameApp,
         camera: Camera,
     ) -> None:
-        if not camera.is_world_rect_visible(
-            self.x,
-            self.y,
-            self.width,
-            self.height,
-        ):
-            return
+        # Keep direct drawing available for isolated tests or tooling. Normal
+        # gameplay uses draw_command() and one Surface.blits call per layer.
+        surface, destination = self.draw_command(app, camera)
+        screen.blit(surface, destination)
 
-        rect = camera.rect_from_world_center(
-            self.x,
-            self.y,
-            self.width,
-            self.height,
-        )
-        screen.blit(self._load_surface(app), rect.topleft)
+    def _surface_for_draw(self, app: GameApp) -> pygame.Surface:
+        cls = type(self)
+        if (
+            self._bound_surface is None
+            or self._bound_surface_revision != cls._surface_cache_revision
+        ):
+            self._bound_surface = self._load_surface(app)
+            self._bound_surface_revision = cls._surface_cache_revision
+        return self._bound_surface
 
     def _load_surface(self, app: GameApp) -> pygame.Surface:
         return self._load_surface_for_path(
